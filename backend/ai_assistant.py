@@ -234,42 +234,61 @@ def _build_system_prompt(lang: str = "ru") -> str:
 _JSON_DECODER = json.JSONDecoder()
 
 
-def _scan_first_json_object(text: str) -> Optional[Dict[str, Any]]:
+def _is_ai_response_object(obj: Any) -> bool:
+    if not isinstance(obj, dict):
+        return False
+    return isinstance(obj.get("message"), str) or isinstance(obj.get("actions"), list)
+
+
+def _scan_first_ai_response_object(text: str) -> Optional[Dict[str, Any]]:
     """Walk the string, asking the JSON decoder to consume an object at
     each '{' until one parses cleanly. Avoids the previous greedy regex
-    that could splice two unrelated JSON blobs together."""
+    that could splice two unrelated JSON blobs together. Non-StarAI JSON
+    objects are skipped so a diagnostic blob cannot hide the real reply."""
     idx = 0
     while True:
         start = text.find("{", idx)
         if start == -1:
             return None
         try:
-            obj, _end = _JSON_DECODER.raw_decode(text, start)
+            obj, end = _JSON_DECODER.raw_decode(text, start)
         except json.JSONDecodeError:
             idx = start + 1
             continue
-        if isinstance(obj, dict):
+        if _is_ai_response_object(obj):
             return obj
-        idx = start + 1
+        idx = end
+
+
+def _load_ai_response_object(text: str) -> Optional[Dict[str, Any]]:
+    try:
+        obj = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    return obj if _is_ai_response_object(obj) else None
+
+
+def _response_message(parsed: Dict[str, Any], fallback: str) -> str:
+    message = parsed.get("message")
+    return message if isinstance(message, str) else fallback
 
 
 def _parse_ai_response(text: str) -> Optional[Dict[str, Any]]:
     """Best-effort JSON extraction from a model response. Models often
     wrap JSON in ```json … ``` fences or surround it with prose."""
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        pass
+    loaded = _load_ai_response_object(text)
+    if loaded is not None:
+        return loaded
     fence_match = re.search(r'```(?:json)?\s*([\s\S]*?)```', text)
     if fence_match:
         fenced = fence_match.group(1).strip()
-        try:
-            return json.loads(fenced)
-        except json.JSONDecodeError:
-            scanned = _scan_first_json_object(fenced)
-            if scanned is not None:
-                return scanned
-    return _scan_first_json_object(text)
+        loaded = _load_ai_response_object(fenced)
+        if loaded is not None:
+            return loaded
+        scanned = _scan_first_ai_response_object(fenced)
+        if scanned is not None:
+            return scanned
+    return _scan_first_ai_response_object(text)
 
 
 async def _ask_anthropic(
@@ -306,7 +325,7 @@ async def _ask_anthropic(
     if parsed is None:
         return _wrap_response(text, [], lang=lang, source="anthropic")
     return _wrap_response(
-        parsed.get("message", text),
+        _response_message(parsed, text),
         parsed.get("actions", []),
         lang=lang,
         source="anthropic",
@@ -360,7 +379,7 @@ async def _ask_openrouter(
     if parsed is None:
         return _wrap_response(text, [], lang=lang, source="openrouter")
     return _wrap_response(
-        parsed.get("message", text),
+        _response_message(parsed, text),
         parsed.get("actions", []),
         lang=lang,
         source="openrouter",

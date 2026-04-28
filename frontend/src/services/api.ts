@@ -141,14 +141,17 @@ export async function fetchOptimizePlanes(opts: {
 
 // ── StarAI ──────────────────────────────────────────────────────────
 
+const MAX_CHAT_HISTORY_ITEMS = 30;
+
 export async function sendChatMessage(
   message: string,
   history: ChatMessage[],
   lang: string = 'ru',
 ): Promise<APIChatResponse> {
+  const boundedHistory = history.slice(-MAX_CHAT_HISTORY_ITEMS);
   const body: Record<string, unknown> = {
     message,
-    history: history.map((m) => ({ role: m.role, content: m.content })),
+    history: boundedHistory.map((m) => ({ role: m.role, content: m.content })),
     lang,
   };
   return fetchJSON('/starai/chat', {

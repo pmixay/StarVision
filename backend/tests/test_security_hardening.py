@@ -151,9 +151,20 @@ def test_parse_ai_response_does_not_glue_two_objects():
         "trailing"
     )
     parsed = _parse_ai_response(text)
-    assert parsed is not None
-    # Either object is acceptable — the contract is "first valid object".
-    assert "message" in parsed or "error" in parsed
+    assert parsed == {"message": "real", "actions": [{"type": "reset_view"}]}
+
+
+def test_parse_ai_response_ignores_non_contract_json():
+    text = '{"error": "ignored"}'
+    assert _parse_ai_response(text) is None
+
+
+def test_parse_ai_response_skips_nested_diagnostic_objects():
+    text = (
+        '{"error": {"message": "ignored", "actions": []}}\n'
+        '{"message": "real", "actions": []}'
+    )
+    assert _parse_ai_response(text) == {"message": "real", "actions": []}
 
 
 def test_parse_ai_response_rejects_pure_prose():
