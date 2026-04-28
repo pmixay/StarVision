@@ -148,7 +148,7 @@ ANTHROPIC_DEFAULT_MODEL = "claude-sonnet-4-20250514"
 # OpenRouter — OpenAI-compatible gateway. The key is stored server-side in
 # backend/.env so the browser never receives or forwards it.
 OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
-OPENROUTER_DEFAULT_MODEL = "openai/gpt-4o-mini"
+OPENROUTER_MODEL = "openai/gpt-oss-120b"
 
 
 def _env(name: str) -> str:
@@ -167,9 +167,13 @@ def _get_openrouter_api_key() -> str:
     return _env("OPENROUTER_API_KEY")
 
 
-def _get_openrouter_model(model: Optional[str] = None) -> str:
-    default_model = _env("OPENROUTER_DEFAULT_MODEL") or OPENROUTER_DEFAULT_MODEL
-    return (model or default_model).strip() or default_model
+def _get_openrouter_model(_model: Optional[str] = None) -> str:
+    """Return the fixed OpenRouter model.
+
+    `_model` is intentionally ignored: StarAI must not be switched to a
+    different provider model via client input or environment overrides.
+    """
+    return OPENROUTER_MODEL
 
 SYSTEM_PROMPT_BASE = """You are StarAI, the intelligent assistant of the StarVision project.
 StarVision is a digital twin of a constellation of Russian cubesats and small spacecraft.
@@ -394,7 +398,7 @@ async def ask_starai(
     """Send a message to StarAI and receive response + UI commands.
 
     Provider routing:
-    - server-side OPENROUTER_API_KEY -> OpenRouter with default model
+    - server-side OPENROUTER_API_KEY -> OpenRouter with fixed model
     - server-side ANTHROPIC_API_KEY -> Claude direct fallback
     - otherwise → offline fallback (canned responses)
     """
