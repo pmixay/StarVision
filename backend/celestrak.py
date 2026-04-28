@@ -344,7 +344,7 @@ async def get_tle_by_source(source: str = "embedded") -> Dict[str, object]:
         "tle_data": [ {..., "source": "celestrak"|"embedded"|"embedded_fallback"}, ...],
         "meta": {
           "requested_source": "embedded" | "celestrak",
-          "effective_source": "embedded" | "celestrak" | "embedded_fallback",
+          "effective_source": "embedded" | "celestrak" | "celestrak_partial" | "embedded_fallback",
           "fallback": bool,      # True if we could not honor requested source fully
           "error": Optional[str], # Populated on network/parse failures
           ...cache_status
@@ -438,7 +438,7 @@ async def get_tle_by_source(source: str = "embedded") -> Dict[str, object]:
         if not result:
             effective = "embedded_fallback"
         elif any_fallback:
-            effective = "mixed"
+            effective = "celestrak_partial"
 
         return {
             "tle_data": result,
