@@ -249,7 +249,7 @@ def _filter_operational(positions: list) -> list:
 async def root():
     return {
         "project": "StarVision",
-        "version": "1.2.0",
+        "version": "1.3.0",
         "description": "Цифровой двойник группировки российских кубсатов",
     }
 

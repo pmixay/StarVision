@@ -1,4 +1,4 @@
-# StarVision v1.2 — CubeSat Constellation Digital Twin
+# StarVision v1.3 — CubeSat Constellation Digital Twin
 
 > **Hackathon: Digital Twins of Space Systems**
 > Interactive 3D prototype of a CubeSat constellation digital twin
@@ -22,7 +22,7 @@
 
 ## Features
 
-- **15 Russian spacecraft** catalog (14 active + 1 deorbited): Descartes, NORBI, Yarilo-1, CubeSX-HSE, UmKA-1, NORBI-2, CubeSX-HSE-3, Monitor-2, Yarilo-3, SamSat-Ionosphere, TUSUR GO, RTU MIREA-1, Horizont, ASRTU-1, Geoscan-Edelveis
+- **17 Russian spacecraft** catalog (all active): Dekart, NORBI, Yarilo-1, CubeSX-HSE, ReshUCube-2, VIZARD-meteo, UmKA-1, NORBI-2, CubeSX-HSE-3, Monitor-2, Yarilo-3, SamSat-Ionosphere, TUSUR GO, RTU MIREA-1, Horizont, ASRTU-1, Vizard-ion
 - **Client-side SGP4** via `satellite.js` — smooth per-frame animation
 - **Inter-satellite links (ISL)** — per-frame distance calculation with LOS check (Earth shadow)
 - **TLE source: embedded data or CelesTrak** — one-click switching
@@ -162,12 +162,12 @@ Frontend auto-proxies `/api/*` to `localhost:8000` (configured in `vite.config.t
 
 | Constellation | Satellites | Purpose | Form factor |
 |---|---|---|---|
-| **UniverSat** | Descartes (46493), NORBI (46494), NORBI-2 (57179), SamSat-Ionosphere (61784) | EO, AIS, radiation, ionosphere | 3U / 6U |
+| **UniverSat** | Dekart (46493), NORBI (46494), NORBI-2 (57179), SamSat-Ionosphere (61784) | EO, AIS, radiation, ionosphere | 3U / 6U |
 | **Bauman MSTU** | Yarilo-1 (46490), UmKA-1 (57172), Yarilo-3 (57198) | Solar physics, technology demo | 1.5U / 3U |
-| **SPUTNIX** | CubeSX-HSE (47952), CubeSX-HSE-3 (57178) | Earth observation, tech experiments | 3U |
-| **Geoscan** | Geoscan-Edelveis (53385) ⚠ deorbited | Platform test, propulsion | 3U |
+| **SPUTNIX** | CubeSX-HSE (47952), CubeSX-HSE-3 (57178), VIZARD-meteo (57189) | Earth observation, Arctic monitoring, tech experiments | 3U |
+| **Geoscan** | Vizard-ion (61749) | VERA plasma propulsion test, ionosphere radio occultation | 3U |
 | **SINP MSU** | Monitor-2 (57184) | X-ray / gamma observations | 3U |
-| **Space-Pi** | TUSUR GO (61782), RTU MIREA-1 (61785), Horizont (61757), ASRTU-1 (61781) | Educational, scientific | 3U |
+| **Space-Pi** | ReshUCube-2 (57168), TUSUR GO (61782), RTU MIREA-1 (61785), Horizont (61757), ASRTU-1 (61781) | Educational, scientific, IoT/ISL | 3U |
 
 ---
 
@@ -203,7 +203,7 @@ For full architectural documentation with Mermaid diagrams, see **[ARCHITECTURE.
 
 | Method | URL | Description |
 |---|---|---|
-| GET | `/api/satellites` | List of all 15 spacecraft with metadata |
+| GET | `/api/satellites` | List of all 17 spacecraft with metadata |
 | GET | `/api/health` | Backend liveness + cache status |
 | GET | `/api/positions` | Current ECI coordinates of all spacecraft |
 | GET | `/api/tle?source=embedded\|celestrak` | TLE data (embedded or from CelesTrak) |

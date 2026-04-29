@@ -7,7 +7,7 @@
  * - Model source: procedural Three.js (BoxGeometry + PlaneGeometry)
  */
 
-import { useRef, useMemo, useEffect, useCallback, useState, memo } from 'react';
+import { useRef, useMemo, useEffect, useCallback, memo } from 'react';
 import { useFrame } from '@react-three/fiber';
 import { Html } from '@react-three/drei';
 import { Vector3, Group, DoubleSide } from 'three';
@@ -134,6 +134,14 @@ interface SatMarkerProps {
   getECI?: () => { x: number; y: number; z: number } | null;
 }
 
+// Hysteresis thresholds for the line-of-sight occlusion test (Earth radius = 1).
+// When a satellite skirts the limb at high simulation speed, a single binary
+// threshold flips on/off frame-by-frame and the label appears to flicker.
+// The two-threshold scheme requires the geometry to clearly cross either side
+// before changing the label state, which kills the boundary jitter.
+const LABEL_HIDE_DIST = 0.95;
+const LABEL_SHOW_DIST = 0.99;
+
 const SatMarker = memo(function SatMarker({
   name,
   constellation,
@@ -146,10 +154,13 @@ const SatMarker = memo(function SatMarker({
 }: SatMarkerProps) {
   const groupRef = useRef<Group>(null);
   const bodyRef = useRef<Group>(null);
-  const [labelVisible, setLabelVisible] = useState(true);
-  // Track visibility in a ref to avoid stale closure in setLabelVisible
-  const visibleRef = useRef(true);
-  const frameCountRef = useRef(0);
+  // Drive the label visibility through a DOM ref + opacity transition rather
+  // than React state so a flip near the horizon does not remount the drei
+  // <Html> portal — that remount is the actual visual "blink" users notice
+  // at high time-acceleration. The CSS transition smooths the fade and the
+  // ref tracks the current logical state for the hysteresis check below.
+  const labelDivRef = useRef<HTMLDivElement>(null);
+  const labelVisibleRef = useRef(true);
 
   const color = useMemo(() => getColor(constellation), [constellation]);
   const modelType = useMemo(() => getModelType(constellation), [constellation]);
@@ -170,26 +181,34 @@ const SatMarker = memo(function SatMarker({
         );
       }
     }
-    // Check if satellite is behind Earth (label occlusion) — throttled to every 10 frames
-    if (groupRef.current) {
-      frameCountRef.current++;
-      if (frameCountRef.current % 10 === 0) {
-        const satPos = groupRef.current.position;
-        const camPos = camera.position;
-        const dx = satPos.x - camPos.x;
-        const dy = satPos.y - camPos.y;
-        const dz = satPos.z - camPos.z;
-        const lenSq = dx * dx + dy * dy + dz * dz;
-        const t = Math.max(0, Math.min(1, -(camPos.x * dx + camPos.y * dy + camPos.z * dz) / lenSq));
-        const cx = camPos.x + t * dx;
-        const cy = camPos.y + t * dy;
-        const cz = camPos.z + t * dz;
+    // Earth-occlusion check for the satellite name. Run every frame — the
+    // math is a handful of multiplies and one sqrt; throttling it to every
+    // Nth frame is what introduced the flicker at high simulation speed
+    // (a fast-moving satellite could cross the horizon both ways inside
+    // a single throttle window).
+    if (showLabel && groupRef.current && labelDivRef.current) {
+      const satPos = groupRef.current.position;
+      const camPos = camera.position;
+      const dx = satPos.x - camPos.x;
+      const dy = satPos.y - camPos.y;
+      const dz = satPos.z - camPos.z;
+      const lenSq = dx * dx + dy * dy + dz * dz;
+      let nextVisible = labelVisibleRef.current;
+      if (lenSq > 0) {
+        const tParam = Math.max(0, Math.min(1, -(camPos.x * dx + camPos.y * dy + camPos.z * dz) / lenSq));
+        const cx = camPos.x + tParam * dx;
+        const cy = camPos.y + tParam * dy;
+        const cz = camPos.z + tParam * dz;
         const distToCenter = Math.sqrt(cx * cx + cy * cy + cz * cz);
-        const newVisible = distToCenter >= 0.95;
-        if (newVisible !== visibleRef.current) {
-          visibleRef.current = newVisible;
-          setLabelVisible(newVisible);
+        if (labelVisibleRef.current && distToCenter < LABEL_HIDE_DIST) {
+          nextVisible = false;
+        } else if (!labelVisibleRef.current && distToCenter > LABEL_SHOW_DIST) {
+          nextVisible = true;
         }
+      }
+      if (nextVisible !== labelVisibleRef.current) {
+        labelVisibleRef.current = nextVisible;
+        labelDivRef.current.style.opacity = nextVisible ? '1' : '0';
       }
     }
   });
@@ -214,8 +233,11 @@ const SatMarker = memo(function SatMarker({
         />
       </mesh>
 
-      {/* Подпись — hidden when behind Earth via manual occlusion check */}
-      {showLabel && labelVisible && (
+      {/* Label — kept mounted while showLabel is true; visibility is driven
+          via opacity through a DOM ref to avoid React remounts that would
+          otherwise blink the label whenever the satellite crosses the
+          Earth horizon. */}
+      {showLabel && (
         <Html
           position={[0, 0.05, 0]}
           center
@@ -227,7 +249,11 @@ const SatMarker = memo(function SatMarker({
           zIndexRange={[5, 0]}
           style={{ pointerEvents: 'none' }}
         >
-          <div className="sat-label" style={{ color }}>
+          <div
+            ref={labelDivRef}
+            className="sat-label"
+            style={{ color, opacity: 1, transition: 'opacity 160ms ease-out' }}
+          >
             {name}
             {isSelected && (
               <div style={{ fontSize: '8px', opacity: 0.7 }}>

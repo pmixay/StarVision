@@ -38,7 +38,7 @@ export function ControlPanel() {
 
   const [tleLoading, setTleLoading] = useState(false);
 
-  const _applyTleResponse = (
+  const applyTleResponse = (
     requested: 'embedded' | 'celestrak',
     res: Awaited<ReturnType<typeof fetchTLE>>,
     opts: { refreshed?: boolean } = {},
@@ -97,7 +97,7 @@ export function ControlPanel() {
     setTleLoading(true);
     try {
       const res = await fetchTLE(source);
-      _applyTleResponse(source, res);
+      applyTleResponse(source, res);
     } catch (err) {
       const detail = err instanceof ApiError ? err.detail : String(err);
       pushToast({
@@ -117,7 +117,7 @@ export function ControlPanel() {
     setTleLoading(true);
     try {
       const res = await refreshTLE();
-      _applyTleResponse('celestrak', res, { refreshed: true });
+      applyTleResponse('celestrak', res, { refreshed: true });
     } catch (err) {
       const detail = err instanceof ApiError ? err.detail : String(err);
       pushToast({
