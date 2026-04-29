@@ -273,6 +273,9 @@ async def _run_celestrak_fetch(
     target_set = set(norad_ids)
     network_error: Optional[str] = None
     _last_fetch_attempt = time.time()
+    # Per-task outcome counters so we can emit a single summary line
+    # instead of N tracebacks when CelesTrak is blocked.
+    outcomes: Dict[str, int] = {"ok": 0, "empty": 0, "network": 0, "http": 0, "other": 0}
 
     try:
         try:
@@ -317,27 +320,42 @@ async def _run_celestrak_fetch(
                 done, pending = await asyncio.wait(
                     tasks, timeout=FETCH_WALL_CLOCK_BUDGET_SEC,
                 )
+                cancelled = len(pending)
                 if pending:
-                    logger.warning(
-                        "TLE fetch hit %.1fs wall-clock cap; %d pending, %d done",
-                        FETCH_WALL_CLOCK_BUDGET_SEC, len(pending), len(done),
-                    )
                     for fut in pending:
                         fut.cancel()
 
                 for fut in done:
-                    try:
-                        result = fut.result()
-                    except Exception:  # noqa: BLE001
-                        continue
-                    if isinstance(result, dict):
-                        for nid, tle in result.items():
+                    parsed, kind = fut.result()
+                    outcomes[kind] = outcomes.get(kind, 0) + 1
+                    if parsed:
+                        for nid, tle in parsed.items():
                             if nid in target_set:
                                 all_tle[nid] = tle
+                # Any non-success outcome whose root cause was network
+                # (timeout / DNS / refused) means we should report
+                # `network_error` to the client even if a partial result
+                # squeaked through from a mirror.
+                if outcomes["network"] > 0:
+                    network_error = ERR_NETWORK
+                # Single, traceback-free summary. INFO when we got data,
+                # WARNING when nothing landed — distinguishes "slow but
+                # working" from "fully unreachable" at a glance.
+                level = logging.INFO if all_tle else logging.WARNING
+                logger.log(
+                    level,
+                    "TLE fetch summary: %d ok, %d empty, %d network-error, "
+                    "%d http-error, %d other-error, %d cancelled (budget %.1fs)",
+                    outcomes["ok"], outcomes["empty"], outcomes["network"],
+                    outcomes["http"], outcomes["other"], cancelled,
+                    FETCH_WALL_CLOCK_BUDGET_SEC,
+                )
         except Exception:
-            # Full traceback goes to server logs only; clients see an
-            # opaque code via get_cache_status().
-            logger.exception("CelesTrak network error")
+            # Anything that escapes the gather itself (e.g. client
+            # construction failure) is genuinely unexpected — keep the
+            # traceback. Per-request failures are handled inside
+            # `_fetch_url` and reported via `outcomes`.
+            logger.exception("CelesTrak fetch coordinator crashed")
             network_error = ERR_NETWORK
 
         if all_tle:
@@ -365,23 +383,52 @@ async def _run_celestrak_fetch(
             _inflight_fetch = None
 
 
-async def _fetch_url(client: httpx.AsyncClient, url: str) -> Dict[int, Tuple[str, str]]:
-    """Fetch and parse TLE from a single URL."""
+async def _fetch_url(
+    client: httpx.AsyncClient, url: str,
+) -> Tuple[Dict[int, Tuple[str, str]], str]:
+    """Fetch and parse TLE from a single URL.
+
+    Returns `(parsed, outcome)` where `outcome` is one of
+    ``ok``, ``empty``, ``network``, ``http``, ``other``. The coordinator
+    aggregates outcomes into a single summary log line — that's why
+    individual network failures here are silent (DEBUG only): emitting a
+    full traceback per endpoint when CelesTrak is blocked from the user's
+    network drowns the log in noise for an entirely expected condition.
+    """
     try:
         resp = await client.get(url)
-        if resp.status_code == 404:
-            logger.debug("CelesTrak 404 for %s (satellite may be deorbited)", url.split("CATNR=")[-1].split("&")[0] if "CATNR=" in url else url)
-            return {}
-        resp.raise_for_status()
-        parsed = _parse_tle_text(resp.text)
-        if parsed:
-            logger.debug("Fetched %d TLE entries from %s", len(parsed), url.split("?")[0])
-        return parsed
+    except (httpx.TimeoutException, httpx.NetworkError, httpx.ProtocolError) as exc:
+        logger.debug("CelesTrak unreachable for %s: %s", url, exc.__class__.__name__)
+        return {}, "network"
+    except httpx.HTTPError as exc:
+        logger.debug("CelesTrak HTTP transport error for %s: %s", url, exc.__class__.__name__)
+        return {}, "http"
+    except asyncio.CancelledError:
+        # The wall-clock cap cancelled us; bubble up so the task records
+        # as cancelled rather than as a silent empty result.
+        raise
     except Exception:
-        # Server-side only; the exception object is not returned or
-        # embedded in any value that could flow to a client.
-        logger.warning("CelesTrak fetch failed for %s", url, exc_info=True)
-        return {}
+        logger.warning("CelesTrak fetch unexpected error for %s", url, exc_info=True)
+        return {}, "other"
+
+    if resp.status_code == 404:
+        # 404 is normal for individual NORAD lookups — sat may be deorbited
+        # or simply absent from CelesTrak's catalog. Not an error.
+        return {}, "empty"
+    if resp.status_code >= 400:
+        logger.debug("CelesTrak HTTP %d for %s", resp.status_code, url)
+        return {}, "http"
+
+    try:
+        parsed = _parse_tle_text(resp.text)
+    except Exception:
+        logger.warning("Failed to parse TLE response from %s", url, exc_info=True)
+        return {}, "other"
+
+    if not parsed:
+        return {}, "empty"
+    logger.debug("Fetched %d TLE entries from %s", len(parsed), url.split("?")[0])
+    return parsed, "ok"
 
 
 async def get_tle_by_source(source: str = "embedded") -> Dict[str, object]:

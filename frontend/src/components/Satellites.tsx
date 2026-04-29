@@ -10,7 +10,7 @@
 import { useRef, useMemo, useEffect, useCallback, useState, memo } from 'react';
 import { useFrame } from '@react-three/fiber';
 import { Html } from '@react-three/drei';
-import { Vector3, Group } from 'three';
+import { Vector3, Group, DoubleSide } from 'three';
 import { twoline2satrec, propagate } from 'satellite.js';
 import { getSimTime, advanceSimTime } from '../simClock';
 import { CONSTELLATION_COLORS, CONSTELLATION_NAMES, CONSTELLATION_MODEL_TYPE } from '../constants';
@@ -58,7 +58,7 @@ function CubeSat1U({ color, emissiveIntensity }: { color: string; emissiveIntens
           emissiveIntensity={0.4}
           metalness={0.3}
           roughness={0.7}
-          side={2}
+          side={DoubleSide}
         />
       </mesh>
       <mesh position={[-(panelW / 2 + size / 2), 0, 0]}>
@@ -69,7 +69,7 @@ function CubeSat1U({ color, emissiveIntensity }: { color: string; emissiveIntens
           emissiveIntensity={0.4}
           metalness={0.3}
           roughness={0.7}
-          side={2}
+          side={DoubleSide}
         />
       </mesh>
     </group>
@@ -111,7 +111,7 @@ function CubeSat3U({ color, emissiveIntensity }: { color: string; emissiveIntens
               emissiveIntensity={0.45}
               metalness={0.25}
               roughness={0.65}
-              side={2}
+              side={DoubleSide}
             />
           </mesh>
         ))
@@ -494,7 +494,7 @@ export function Satellites({
       {/* ── Орбитальные треки (реальные TLE) ────────────── */}
       {showOrbits && orbitAltitudeKm === 0 &&
         Object.entries(orbitPaths).map(([id, path]) => {
-          const numId = parseInt(id);
+          const numId = parseInt(id, 10);
           const constellation = satelliteConstellations[numId] || '';
           if (!activeConstellations.includes(constellation)) return null;
           if (!filteredRealPositions.some((p) => p.norad_id === numId)) return null;

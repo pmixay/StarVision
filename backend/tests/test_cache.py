@@ -96,6 +96,47 @@ def test_invalidate_cache_resets_state():
 
 
 @pytest.mark.asyncio
+async def test_fetch_url_classifies_network_failures_quietly(monkeypatch, caplog):
+    """A connect-timeout from httpx must surface as the `network` outcome
+    and must NOT emit a stack trace — the per-task summary is the only
+    log line we want when CelesTrak is blocked from the user's network.
+    """
+    import logging
+
+    import httpx
+
+    class _BoomClient:
+        async def get(self, _url):
+            raise httpx.ConnectTimeout("blocked")
+
+    caplog.set_level(logging.DEBUG, logger=celestrak.logger.name)
+    parsed, outcome = await celestrak._fetch_url(_BoomClient(), "https://example/x")  # type: ignore[arg-type]
+
+    assert parsed == {}
+    assert outcome == "network"
+    # No traceback frame should leak into the log records — every
+    # known network error is logged at DEBUG without exc_info.
+    assert all(rec.exc_info is None for rec in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_fetch_url_returns_empty_outcome_on_404(monkeypatch):
+    """404 is normal for individual NORAD lookups (deorbited / absent)."""
+
+    class _Resp:
+        status_code = 404
+        text = ""
+
+    class _Client:
+        async def get(self, _url):
+            return _Resp()
+
+    parsed, outcome = await celestrak._fetch_url(_Client(), "https://example/x")  # type: ignore[arg-type]
+    assert parsed == {}
+    assert outcome == "empty"
+
+
+@pytest.mark.asyncio
 async def test_stale_cache_is_served_when_runner_returns_empty(monkeypatch):
     """If the worker fails to fetch fresh data, callers should get the stale cache."""
     # Pre-populate so that even though TTL-fresh check finds it complete,
