@@ -28,6 +28,9 @@ select = [
 ignore = [
     "E501",  # line length is enforced by black
     "B008",  # FastAPI relies on Depends/Query defaults
+    # UP038 (`isinstance(x, X | Y)`) is deprecated in newer ruff because the
+    # union syntax is measurably slower at runtime than the tuple form.
+    "UP038",
 ]
 
 [tool.ruff.lint.per-file-ignores]
