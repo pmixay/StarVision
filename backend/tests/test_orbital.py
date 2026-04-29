@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from satellites import get_satellite_by_id, RUSSIAN_CUBESATS
 from orbital import (
     propagate_satellite, propagate_all, propagate_orbit_path,
-    predict_collisions, optimize_plane_distribution,
+    predict_collisions, predict_virtual_collisions, optimize_plane_distribution, _virtual_eci,
     get_orbital_elements, eci_to_geodetic,
     EARTH_RADIUS_KM,
 )
@@ -158,6 +158,30 @@ class TestPredictCollisions:
         if len(result) > 1:
             distances = [r["min_distance_km"] for r in result]
             assert distances == sorted(distances)
+
+
+class TestPredictVirtualCollisions:
+    def test_returns_list(self):
+        result = predict_virtual_collisions(6, 550.0, 3, 55.0, threshold_km=5000, hours_ahead=1.0)
+        assert isinstance(result, list)
+
+    def test_result_uses_virtual_ids(self):
+        result = predict_virtual_collisions(6, 550.0, 3, 55.0, threshold_km=50000, hours_ahead=0.5)
+        if result:
+            assert result[0]["norad_id_1"] >= 90000
+            assert result[0]["norad_id_2"] >= 90000
+
+    def test_uneven_plane_layout_matches_optimizer(self):
+        result = optimize_plane_distribution(10, 3, 550.0, 0.0)
+        expected_angles = {}
+        for plane in result["planes"]:
+            for sat in plane["satellites"]:
+                expected_angles[sat["index"]] = (plane["raan_deg"] + sat["mean_anomaly_deg"]) % 360.0
+
+        for idx in range(10):
+            x, y, _ = _virtual_eci(idx, 10, 550.0, 0.0, 3, 0.0)
+            angle = (math.degrees(math.atan2(y, x)) + 360.0) % 360.0
+            assert abs(angle - expected_angles[idx]) < 1e-6
 
 
 class TestOptimizePlaneDistribution:

@@ -210,6 +210,28 @@ async def test_get_collisions(client):
 
 
 @pytest.mark.asyncio
+async def test_get_virtual_collisions(client):
+    resp = await client.get(
+        "/api/collisions?mode=virtual&threshold_km=1000&hours_ahead=1&satellite_count=6&altitude_km=550&planes=3&inclination_deg=60"
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["mode"] == "virtual"
+    assert data["source"] == "virtual"
+    assert data["params"]["inclination_deg"] == 60.0
+
+
+@pytest.mark.asyncio
+async def test_get_virtual_collisions_normalizes_plane_count(client):
+    resp = await client.get(
+        "/api/collisions?mode=virtual&threshold_km=1000&hours_ahead=1&satellite_count=3&altitude_km=550&planes=7&inclination_deg=60"
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["params"]["planes"] == 3
+
+
+@pytest.mark.asyncio
 async def test_optimize_planes(client):
     resp = await client.get("/api/optimize-planes?num_satellites=12&num_planes=3&altitude_km=550")
     assert resp.status_code == 200

@@ -10,7 +10,14 @@ import {
   EARTH_MU_KM3_S2,
   circularOrbitPeriodSec,
   computeVirtualECI,
+  degToRad,
+  eciLongitudeDegAtTime,
+  getWalkerLayout,
 } from '../lib/orbital';
+
+function normalizeAngleDeg(angleDeg: number): number {
+  return ((angleDeg % 360) + 360) % 360;
+}
 
 describe('computeVirtualECI', () => {
   it('places a satellite on a sphere of radius R+altitude at t=0', () => {
@@ -61,6 +68,36 @@ describe('computeVirtualECI', () => {
     expect(a.y).toBeCloseTo(b.y, 9);
     expect(a.z).toBeCloseTo(b.z, 9);
   });
+
+  it('applies inclination override consistently', () => {
+    const equatorial = computeVirtualECI(1, 4, 550, 300, 2, degToRad(0));
+    const polarish = computeVirtualECI(1, 4, 550, 300, 2, degToRad(90));
+    expect(Math.abs(equatorial.z)).toBeLessThan(1e-6);
+    expect(Math.abs(polarish.z)).toBeGreaterThan(100);
+  });
+
+  it('matches optimizer-style uneven Walker plane distribution', () => {
+    const expectedAngles = [0, 90, 180, 270, 160, 280, 40, 320, 80, 200];
+    const positions = Array.from({ length: 10 }, (_, i) =>
+      computeVirtualECI(i, 10, 550, 0, 3, degToRad(0)),
+    );
+
+    positions.forEach((p, idx) => {
+      const angle = normalizeAngleDeg(Math.atan2(p.y, p.x) * (180 / Math.PI));
+      expect(angle).toBeCloseTo(expectedAngles[idx], 6);
+    });
+  });
+});
+
+describe('getWalkerLayout', () => {
+  it('clamps plane count to the number of satellites', () => {
+    expect(getWalkerLayout(3, 7)).toMatchObject({
+      effectivePlanes: 3,
+      baseSatellitesPerPlane: 1,
+      remainderSatellites: 0,
+      phaseFactor: 1,
+    });
+  });
 });
 
 describe('circularOrbitPeriodSec', () => {
@@ -75,5 +112,22 @@ describe('circularOrbitPeriodSec', () => {
     const periodMin = circularOrbitPeriodSec(550) / 60;
     expect(periodMin).toBeGreaterThan(85);
     expect(periodMin).toBeLessThan(100);
+  });
+});
+
+describe('eciLongitudeDegAtTime', () => {
+  it('normalizes longitude into [-180, 180)', () => {
+    const lon = eciLongitudeDegAtTime(0, -1, Date.UTC(2026, 0, 1, 0, 0, 0));
+    expect(lon).toBeGreaterThanOrEqual(-180);
+    expect(lon).toBeLessThan(180);
+  });
+
+  it('accounts for Earth rotation over time', () => {
+    const start = Date.UTC(2026, 0, 1, 0, 0, 0);
+    const sixHoursLater = start + 6 * 3600 * 1000;
+    const lon0 = eciLongitudeDegAtTime(EARTH_RADIUS_KM + 550, 0, start);
+    const lon1 = eciLongitudeDegAtTime(EARTH_RADIUS_KM + 550, 0, sixHoursLater);
+    const delta = Math.abs(lon1 - lon0);
+    expect(delta).toBeGreaterThan(80);
   });
 });

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useStore } from '../hooks/useStore';
 import { t } from '../i18n';
 import { fetchCollisions, ApiError } from '../services/api';
@@ -18,24 +18,45 @@ export function CollisionPanel() {
   const [hours, setHours] = useState(24);
   const [loading, setLoading] = useState(false);
   const [approaches, setApproaches] = useState<CollisionApproach[] | null>(null);
-  const { lang, tleSource, pushToast, logEvent, focusSatellite } = useStore();
+  const { lang, tleSource, orbitAltitudeKm, satelliteCount, orbitalPlanes, inclinationDeg, pushToast, logEvent, focusSatellite } = useStore();
+  const requestSeqRef = useRef(0);
+
+  const mode: 'real' | 'virtual' = orbitAltitudeKm > 0 ? 'virtual' : 'real';
+
+  useEffect(() => {
+    requestSeqRef.current += 1;
+    setApproaches(null);
+    setLoading(false);
+  }, [mode, tleSource, satelliteCount, orbitAltitudeKm, orbitalPlanes, inclinationDeg, threshold, hours]);
 
   const run = async () => {
+    const requestId = requestSeqRef.current + 1;
+    requestSeqRef.current = requestId;
     setLoading(true);
     try {
-      const res = await fetchCollisions(threshold, hours, tleSource);
+      const res = await fetchCollisions(threshold, hours, {
+        source: tleSource,
+        mode,
+        satellite_count: satelliteCount,
+        altitude_km: orbitAltitudeKm,
+        planes: orbitalPlanes,
+        inclination_deg: inclinationDeg,
+      });
+      if (requestId !== requestSeqRef.current) return;
       setApproaches(res.close_approaches);
       logEvent({
         level: res.count > 0 ? 'warning' : 'info',
         kind: 'collision_forecast',
         message: `${t('event.collisionForecast', lang)}: ${res.count}`,
-        details: `${threshold} km / ${hours} h`,
+        details: `${mode} · ${threshold} ${t('unit.km', lang)} / ${hours} h`,
       });
     } catch (err) {
+      if (requestId !== requestSeqRef.current) return;
       const detail = err instanceof ApiError ? err.detail : String(err);
       pushToast({ level: 'error', title: t('event.apiError', lang), detail });
       logEvent({ level: 'error', kind: 'api_error', message: 'fetchCollisions failed', details: detail });
     } finally {
+      if (requestId !== requestSeqRef.current) return;
       setLoading(false);
     }
   };
@@ -93,6 +114,9 @@ export function CollisionPanel() {
           />
         </label>
       </div>
+      <div className="text-[9px] text-star-500 font-mono mb-2 uppercase tracking-wide">
+        {t('collision.mode', lang)}: {mode === 'virtual' ? t('mode.virtual', lang) : t('mode.realTle', lang)}
+      </div>
       <button
         onClick={run}
         disabled={loading}
@@ -119,7 +143,7 @@ export function CollisionPanel() {
                   {a.risk_level}
                 </span>
                 <span className="text-[10px] font-mono text-star-300">
-                  {a.min_distance_km.toFixed(1)} km
+                  {a.min_distance_km.toFixed(1)} {t('unit.km', lang)}
                 </span>
               </div>
               <div className="text-[10px] text-star-300 font-body truncate">

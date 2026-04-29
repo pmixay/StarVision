@@ -1,4 +1,4 @@
-import { Suspense, useRef, useMemo, useEffect, useCallback } from 'react';
+import { Suspense, lazy, useRef, useMemo, useEffect, useCallback } from 'react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { OrbitControls, Stars, PerspectiveCamera } from '@react-three/drei';
 import { Group, Vector3 } from 'three';
@@ -7,12 +7,14 @@ import { getSimTime } from '../simClock';
 import { Earth, EARTH_ROTATION_SPEED } from './Earth';
 import { Satellites } from './Satellites';
 import { InterSatelliteLinks } from './InterSatelliteLinks';
-import { CoverageZones } from './CoverageZones';
 import { useStore } from '../hooks/useStore';
-import { computeVirtualECI, SCENE_SCALE } from '../lib/orbital';
+import { computeVirtualECI, degToRad, SCENE_SCALE } from '../lib/orbital';
 import type { SatellitePosition, OrbitPoint, TLEData } from '../types';
 
 const CAM_SCALE = SCENE_SCALE;
+const CoverageZones = lazy(() =>
+  import('./CoverageZones').then((mod) => ({ default: mod.CoverageZones })),
+);
 
 // ── Coordinate grid (equator + latitude circles), rotates with Earth
 function CoordinateGrid() {
@@ -80,10 +82,11 @@ interface CameraControllerProps {
   orbitAltitudeKm: number;
   satelliteCount: number;
   orbitalPlanes: number;
+  inclinationDeg: number;
   controlsRef: React.RefObject<any>;
 }
 
-function CameraController({ tleData, orbitAltitudeKm, satelliteCount, orbitalPlanes, controlsRef }: CameraControllerProps) {
+function CameraController({ tleData, orbitAltitudeKm, satelliteCount, orbitalPlanes, inclinationDeg, controlsRef }: CameraControllerProps) {
   const { camera } = useThree();
   const { focusedSatellite, selectedSatellite, cameraFollowing, setCameraFollowing } = useStore();
   const prevDistRef = useRef<number>(0);
@@ -126,7 +129,7 @@ function CameraController({ tleData, orbitAltitudeKm, satelliteCount, orbitalPla
     const simTime = getSimTime();
     if (orbitAltitudeKm > 0 && id >= 90000) {
       const idx = id - 90000;
-      const eci = computeVirtualECI(idx, satelliteCount, orbitAltitudeKm, simTime / 1000, orbitalPlanes);
+      const eci = computeVirtualECI(idx, satelliteCount, orbitAltitudeKm, simTime / 1000, orbitalPlanes, degToRad(inclinationDeg));
       return new Vector3(eci.x * CAM_SCALE, eci.z * CAM_SCALE, -eci.y * CAM_SCALE);
     }
     const satrec = satrecsRef.current[id];
@@ -135,7 +138,7 @@ function CameraController({ tleData, orbitAltitudeKm, satelliteCount, orbitalPla
     if (!pv.position || typeof pv.position === 'boolean') return null;
     const pos = pv.position as { x: number; y: number; z: number };
     return new Vector3(pos.x * CAM_SCALE, pos.z * CAM_SCALE, -pos.y * CAM_SCALE);
-  }, [orbitAltitudeKm, satelliteCount, orbitalPlanes]);
+  }, [orbitAltitudeKm, satelliteCount, orbitalPlanes, inclinationDeg]);
 
   // Start animation when focus or selection changes
   useEffect(() => {
@@ -246,6 +249,7 @@ function SceneContent({ positions, tleData, orbitPaths, satelliteConstellations 
     satelliteCount,
     orbitAltitudeKm,
     orbitalPlanes,
+    inclinationDeg,
     selectSatellite,
   } = useStore();
 
@@ -272,6 +276,7 @@ function SceneContent({ positions, tleData, orbitPaths, satelliteConstellations 
         orbitAltitudeKm={orbitAltitudeKm}
         satelliteCount={satelliteCount}
         orbitalPlanes={orbitalPlanes}
+        inclinationDeg={inclinationDeg}
         controlsRef={controlsRef}
       />
 
@@ -306,6 +311,7 @@ function SceneContent({ positions, tleData, orbitPaths, satelliteConstellations 
         satelliteCount={satelliteCount}
         orbitAltitudeKm={orbitAltitudeKm}
         orbitalPlanes={orbitalPlanes}
+        inclinationDeg={inclinationDeg}
         timeSpeed={timeSpeed}
       />
 
@@ -316,11 +322,13 @@ function SceneContent({ positions, tleData, orbitPaths, satelliteConstellations 
       />
 
       {/* Satellite coverage zones */}
-      <CoverageZones
-        positions={positions}
-        tleData={tleData}
-        satelliteConstellations={satelliteConstellations}
-      />
+      <Suspense fallback={null}>
+        <CoverageZones
+          positions={positions}
+          tleData={tleData}
+          satelliteConstellations={satelliteConstellations}
+        />
+      </Suspense>
     </>
   );
 }

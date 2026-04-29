@@ -114,13 +114,27 @@ export async function fetchHealth(): Promise<APIHealthResponse> {
 export async function fetchCollisions(
   thresholdKm = 100,
   hoursAhead = 24,
-  source: 'embedded' | 'celestrak' = 'embedded',
+  opts: {
+    source?: 'embedded' | 'celestrak';
+    mode?: 'real' | 'virtual';
+    satellite_count?: number;
+    altitude_km?: number;
+    planes?: number;
+    inclination_deg?: number;
+  } = {},
 ): Promise<APICollisionsResponse> {
   const params = new URLSearchParams({
     threshold_km: String(thresholdKm),
     hours_ahead: String(hoursAhead),
   });
-  if (source !== 'embedded') params.set('source', source);
+  if (opts.source && opts.source !== 'embedded') params.set('source', opts.source);
+  if (opts.mode) params.set('mode', opts.mode);
+  if (opts.mode === 'virtual') {
+    params.set('satellite_count', String(opts.satellite_count ?? 12));
+    params.set('altitude_km', String(opts.altitude_km ?? 550));
+    params.set('planes', String(opts.planes ?? 3));
+    params.set('inclination_deg', String(opts.inclination_deg ?? 55));
+  }
   return fetchJSON<APICollisionsResponse>(`/collisions?${params}`);
 }
 

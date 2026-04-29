@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useStore } from '../hooks/useStore';
 import { t } from '../i18n';
 import { fetchOptimizePlanes, ApiError } from '../services/api';
@@ -8,33 +8,52 @@ export function OptimizerPanel() {
   const [open, setOpen] = useState(false);
   const {
     lang,
-    satelliteCount, orbitalPlanes, orbitAltitudeKm,
-    setSatelliteCount, setOrbitalPlanes, setOrbitAltitudeKm,
+    satelliteCount, orbitalPlanes, orbitAltitudeKm, inclinationDeg,
+    setSatelliteCount, setOrbitalPlanes, setOrbitAltitudeKm, setInclinationDeg,
     pushToast, logEvent,
   } = useStore();
 
   const [num, setNum] = useState(Math.max(3, Math.min(15, satelliteCount)));
   const [planes, setPlanes] = useState(Math.max(1, Math.min(7, orbitalPlanes)));
   const [alt, setAlt] = useState(orbitAltitudeKm > 0 ? orbitAltitudeKm : 550);
-  const [incl, setIncl] = useState(55);
+  const [incl, setIncl] = useState(inclinationDeg);
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<APIOptimizerResponse | null>(null);
+  const requestSeqRef = useRef(0);
 
   const km = lang === 'ru' ? 'км' : 'km';
 
+  useEffect(() => {
+    setNum(Math.max(3, Math.min(15, satelliteCount)));
+    setPlanes(Math.max(1, Math.min(7, orbitalPlanes)));
+    setAlt(orbitAltitudeKm > 0 ? orbitAltitudeKm : 550);
+    setIncl(inclinationDeg);
+  }, [satelliteCount, orbitalPlanes, orbitAltitudeKm, inclinationDeg, open]);
+
+  useEffect(() => {
+    requestSeqRef.current += 1;
+    setResult(null);
+    setLoading(false);
+  }, [num, planes, alt, incl]);
+
   const run = async () => {
+    const requestId = requestSeqRef.current + 1;
+    requestSeqRef.current = requestId;
     setLoading(true);
     try {
       const res = await fetchOptimizePlanes({
         num_satellites: num, num_planes: planes,
         altitude_km: alt, inclination_deg: incl,
       });
+      if (requestId !== requestSeqRef.current) return;
       setResult(res);
     } catch (err) {
+      if (requestId !== requestSeqRef.current) return;
       const detail = err instanceof ApiError ? err.detail : String(err);
       pushToast({ level: 'error', title: t('event.apiError', lang), detail });
       logEvent({ level: 'error', kind: 'api_error', message: 'fetchOptimizePlanes failed', details: detail });
     } finally {
+      if (requestId !== requestSeqRef.current) return;
       setLoading(false);
     }
   };
@@ -44,6 +63,7 @@ export function OptimizerPanel() {
     setSatelliteCount(result.total_satellites);
     setOrbitalPlanes(result.num_planes);
     setOrbitAltitudeKm(result.altitude_km);
+    setInclinationDeg(result.inclination_deg);
     logEvent({
       level: 'success',
       kind: 'optimizer_apply',
@@ -109,11 +129,15 @@ export function OptimizerPanel() {
           </div>
           <div className="flex justify-between text-[10px] font-mono">
             <span className="text-star-500 uppercase">{t('optimizer.period', lang)}</span>
-            <span className="text-star-200">{result.orbital_period_min.toFixed(1)} min</span>
+            <span className="text-star-200">{result.orbital_period_min.toFixed(1)} {t('unit.min', lang)}</span>
           </div>
           <div className="flex justify-between text-[10px] font-mono">
             <span className="text-star-500 uppercase">{t('optimizer.velocity', lang)}</span>
-            <span className="text-star-200">{result.velocity_km_s.toFixed(2)} km/s</span>
+            <span className="text-star-200">{result.velocity_km_s.toFixed(2)} {t('unit.kmps', lang)}</span>
+          </div>
+          <div className="flex justify-between text-[10px] font-mono">
+            <span className="text-star-500 uppercase">{t('optimizer.inclination', lang)}</span>
+            <span className="text-star-200">{result.inclination_deg.toFixed(1)}°</span>
           </div>
           <div className="flex justify-between text-[10px] font-mono">
             <span className="text-star-500 uppercase">{t('optimizer.altitude', lang)}</span>
@@ -126,7 +150,13 @@ export function OptimizerPanel() {
             {t('optimizer.apply', lang)}
           </button>
           <p className="text-[9px] text-star-600 font-body leading-snug">
-            {result.coverage_note}
+            {t('optimizer.coverageNote', lang, {
+              walker: result.walker_notation,
+              planes: result.num_planes,
+              spacing: result.num_planes > 0 ? (360 / result.num_planes).toFixed(1) : '0.0',
+              satsPerPlane: result.sats_per_plane,
+              phase: result.phase_factor,
+            })}
           </p>
         </div>
       )}

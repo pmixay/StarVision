@@ -116,6 +116,15 @@ describe('useStore (Zustand)', () => {
       expect(useStore.getState().orbitalPlanes).toBe(7);
     });
 
+    it('keeps orbital planes within the current satellite count', () => {
+      useStore.getState().setOrbitalPlanes(7);
+      useStore.getState().setSatelliteCount(5);
+      expect(useStore.getState().orbitalPlanes).toBe(5);
+
+      useStore.getState().setOrbitalPlanes(7);
+      expect(useStore.getState().orbitalPlanes).toBe(5);
+    });
+
     it('toggles show flags', () => {
       useStore.getState().setShowOrbits(false);
       expect(useStore.getState().showOrbits).toBe(false);
