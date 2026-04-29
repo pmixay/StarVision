@@ -14,11 +14,11 @@ import { twoline2satrec, propagate } from 'satellite.js';
 import { getSimTime } from '../simClock';
 import { useStore } from '../hooks/useStore';
 import { CONSTELLATION_COLORS, CONSTELLATION_NAMES } from '../constants';
+import { computeVirtualECI, EARTH_RADIUS_KM, SCENE_SCALE } from '../lib/orbital';
 import type { SatellitePosition, TLEData } from '../types';
 
-const R_E = 6371.0;
-const MU = 398600.4418;
-const SCALE = 1 / R_E;
+const R_E = EARTH_RADIUS_KM;
+const SCALE = SCENE_SCALE;
 const SHELL_RADIUS = 1.008;
 const MAX_SATS = 15;
 const MIN_ELEVATION_RAD = 10 * Math.PI / 180;
@@ -75,35 +75,7 @@ function selectUniformly<T>(arr: T[], count: number): T[] {
   return Array.from({ length: count }, (_, i) => arr[Math.floor(i * step)]);
 }
 
-function virtualECI(
-  i: number,
-  total: number,
-  altKm: number,
-  tSec: number,
-  planes: number,
-): { x: number; y: number; z: number } {
-  const a = R_E + altKm;
-  const n = Math.sqrt(MU / (a * a * a));
-  const incl = (55 * Math.PI) / 180;
-  const P = Math.max(1, Math.min(planes, total));
-  const spp = Math.ceil(total / P);
-  const pi = i % P;
-  const si = Math.floor(i / P);
-  const raan = (pi / P) * 2 * Math.PI;
-  const F = P > 1 ? Math.max(1, Math.floor(P / 2)) : 0;
-  const phase = (si / spp) * 2 * Math.PI
-    + (F * pi / P) * (2 * Math.PI / spp);
-  const M = n * tSec + phase;
-  const xOrb = a * Math.cos(M);
-  const yOrb = a * Math.sin(M);
-  const cosR = Math.cos(raan), sinR = Math.sin(raan);
-  const cosI = Math.cos(incl), sinI = Math.sin(incl);
-  return {
-    x: xOrb * cosR - yOrb * cosI * sinR,
-    y: xOrb * sinR + yOrb * cosI * cosR,
-    z: yOrb * sinI,
-  };
-}
+const virtualECI = computeVirtualECI;
 
 function usefulCoverageCosTheta(rKm: number, commRangeKm: number): number | null {
   const altitudeKm = rKm - R_E;
@@ -130,6 +102,7 @@ type CoverageItem = {
   virtualTotal?: number;
   virtualAltKm?: number;
   virtualPlanes?: number;
+  virtualInclinationRad?: number;
 };
 
 function CoverageFootprint({ item, commRangeKm }: { item: CoverageItem; commRangeKm: number }) {
@@ -173,6 +146,7 @@ function CoverageFootprint({ item, commRangeKm }: { item: CoverageItem; commRang
         item.virtualAltKm,
         getSimTime() / 1000,
         item.virtualPlanes ?? 1,
+        item.virtualInclinationRad,
       );
     } else if (satrec) {
       const pv = propagate(satrec, new Date(getSimTime()));
@@ -227,12 +201,14 @@ export function CoverageZones({ positions, tleData, satelliteConstellations }: C
   const satelliteCount = useStore((s) => s.satelliteCount);
   const orbitAltitudeKm = useStore((s) => s.orbitAltitudeKm);
   const orbitalPlanes = useStore((s) => s.orbitalPlanes);
+  const orbitInclinationDeg = useStore((s) => s.orbitInclinationDeg);
   const activeConstellations = useStore((s) => s.activeConstellations);
   const commRangeKm = useStore((s) => s.commRangeKm);
 
   const items = useMemo<CoverageItem[]>(() => {
     if (orbitAltitudeKm > 0) {
       const virtualItems: CoverageItem[] = [];
+      const inclRad = (orbitInclinationDeg * Math.PI) / 180;
       for (let i = 0; i < satelliteCount; i++) {
         const constellation = CONSTELLATION_NAMES[i % CONSTELLATION_NAMES.length];
         if (!activeConstellations.includes(constellation)) continue;
@@ -243,6 +219,7 @@ export function CoverageZones({ positions, tleData, satelliteConstellations }: C
           virtualTotal: satelliteCount,
           virtualAltKm: orbitAltitudeKm,
           virtualPlanes: orbitalPlanes,
+          virtualInclinationRad: inclRad,
         });
       }
       return virtualItems.slice(0, MAX_SATS);
@@ -275,7 +252,7 @@ export function CoverageZones({ positions, tleData, satelliteConstellations }: C
       color: getColor(satelliteConstellations[position.norad_id] ?? ''),
       position,
     }));
-  }, [activeConstellations, orbitAltitudeKm, orbitalPlanes, positions, satelliteConstellations, satelliteCount, tleData]);
+  }, [activeConstellations, orbitAltitudeKm, orbitalPlanes, orbitInclinationDeg, positions, satelliteConstellations, satelliteCount, tleData]);
 
   if (!showCoverage || items.length === 0) return null;
 

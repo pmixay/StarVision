@@ -8,15 +8,15 @@ export function OptimizerPanel() {
   const [open, setOpen] = useState(false);
   const {
     lang,
-    satelliteCount, orbitalPlanes, orbitAltitudeKm,
-    setSatelliteCount, setOrbitalPlanes, setOrbitAltitudeKm,
+    satelliteCount, orbitalPlanes, orbitAltitudeKm, orbitInclinationDeg,
+    setSatelliteCount, setOrbitalPlanes, setOrbitAltitudeKm, setOrbitInclinationDeg,
     pushToast, logEvent,
   } = useStore();
 
   const [num, setNum] = useState(Math.max(3, Math.min(15, satelliteCount)));
   const [planes, setPlanes] = useState(Math.max(1, Math.min(7, orbitalPlanes)));
   const [alt, setAlt] = useState(orbitAltitudeKm > 0 ? orbitAltitudeKm : 550);
-  const [incl, setIncl] = useState(55);
+  const [incl, setIncl] = useState(orbitInclinationDeg);
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<APIOptimizerResponse | null>(null);
 
@@ -44,6 +44,9 @@ export function OptimizerPanel() {
     setSatelliteCount(result.total_satellites);
     setOrbitalPlanes(result.num_planes);
     setOrbitAltitudeKm(result.altitude_km);
+    // Inclination must round-trip too — without this the virtual scene
+    // ignores the slider and silently uses the legacy 55° default.
+    setOrbitInclinationDeg(result.inclination_deg);
     logEvent({
       level: 'success',
       kind: 'optimizer_apply',
@@ -119,6 +122,36 @@ export function OptimizerPanel() {
             <span className="text-star-500 uppercase">{t('optimizer.altitude', lang)}</span>
             <span className="text-star-200">{result.altitude_km} {km}</span>
           </div>
+          <div className="flex justify-between text-[10px] font-mono">
+            <span className="text-star-500 uppercase">{t('optimizer.inclination', lang)}</span>
+            <span className="text-star-200">{result.inclination_deg.toFixed(0)}°</span>
+          </div>
+          {result.objective && (
+            <div className="mt-1 pt-1 border-t border-star-900/40 space-y-0.5">
+              <div className="flex justify-between text-[10px] font-mono">
+                <span className="text-star-500 uppercase">{t('optimizer.score', lang)}</span>
+                <span className="text-green-400">
+                  {(result.objective.score * 100).toFixed(0)}%
+                </span>
+              </div>
+              <div className="flex justify-between text-[9px] font-mono opacity-80">
+                <span className="text-star-600 uppercase">{t('optimizer.coverage', lang)}</span>
+                <span className="text-star-300">
+                  {(result.objective.coverage_fraction * 100).toFixed(0)}%
+                </span>
+              </div>
+              <div className="flex justify-between text-[9px] font-mono opacity-80">
+                <span className="text-star-600 uppercase">{t('optimizer.uniformity', lang)}</span>
+                <span className="text-star-300">
+                  {(result.objective.phase_uniformity * 100).toFixed(0)}%
+                </span>
+              </div>
+              <div className="flex justify-between text-[9px] font-mono opacity-60">
+                <span className="text-star-700 uppercase">{t('optimizer.candidates', lang)}</span>
+                <span className="text-star-500">{result.objective.candidates_evaluated}</span>
+              </div>
+            </div>
+          )}
           <button
             onClick={apply}
             className="btn-star w-full text-[10px] py-1.5 mt-1"

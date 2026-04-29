@@ -12,7 +12,7 @@ import { OptimizerPanel } from './components/OptimizerPanel';
 import { useStore } from './hooks/useStore';
 import {
   fetchSatellites, fetchPositions, fetchOrbitPath, fetchAllOrbitPaths,
-  fetchTLE, fetchHealth, ApiError,
+  fetchTLE, fetchHealth, fetchLinks, ApiError,
 } from './services/api';
 import { getSimTime } from './simClock';
 import { CONSTELLATION_NAMES } from './constants';
@@ -28,6 +28,8 @@ export default function App() {
     setTleMeta,
     setOrbitPaths,
     setBackendHealth,
+    setNetworkAnalytics,
+    commRangeKm,
     pushToast,
     logEvent,
     timeSpeed,
@@ -86,6 +88,28 @@ export default function App() {
     // deliberately run once on mount; locale changes don't require refetch.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Network analytics polling — drives the ISL connectivity widget.
+  // The /api/links payload also feeds the per-satellite tooltip layer
+  // that now lives in MissionDashboard. The old code only counted
+  // active links; this also reveals partition events that "active=N"
+  // would silently mask.
+  useEffect(() => {
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const res = await fetchLinks(commRangeKm, tleSource);
+        if (cancelled) return;
+        setNetworkAnalytics(res.network ?? null);
+      } catch {
+        if (cancelled) return;
+        setNetworkAnalytics(null);
+      }
+    };
+    tick();
+    const id = setInterval(tick, 15000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [commRangeKm, tleSource, setNetworkAnalytics]);
 
   // Health polling — lightweight, kicks the status indicator.
   useEffect(() => {

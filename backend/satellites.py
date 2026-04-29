@@ -272,11 +272,11 @@ def get_operational_satellites() -> List[SatelliteInfo]:
     return [s for s in RUSSIAN_CUBESATS if is_operational(s.status)]
 
 
+_BY_NORAD: dict[int, SatelliteInfo] = {s.norad_id: s for s in RUSSIAN_CUBESATS}
+
+
 def get_satellite_by_id(norad_id: int) -> Optional[SatelliteInfo]:
-    for s in RUSSIAN_CUBESATS:
-        if s.norad_id == norad_id:
-            return s
-    return None
+    return _BY_NORAD.get(norad_id)
 
 
 def get_tle_data() -> List[dict]:

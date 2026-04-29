@@ -38,7 +38,7 @@ Walker-режим, визуализацию межспутниковых свя�
 | Inter-satellite links | Per-frame distance + Earth-shadow LOS, object pooling | [InterSatelliteLinks.tsx](frontend/src/components/InterSatelliteLinks.tsx) |
 | UI parameters (≥ 3) | Count, altitude (TLE or 400–2000 km), comm range 50–2000 km, speed, planes, coverage, labels, constellation filter | [ControlPanel.tsx](frontend/src/components/ControlPanel.tsx) |
 | Open data sources | CelesTrak TLE + embedded fallback with explicit meta | [celestrak.py](backend/celestrak.py), Header/MissionDashboard |
-| Performance | Throttled raycasting, object pool, adaptive DPR | See "Performance" section |
+| Performance | Throttled raycasting, object pool, measurement-driven adaptive DPR | See "Performance" section |
 | RU / EN interface | Full i18n across every user-facing string | [i18n.ts](frontend/src/i18n.ts) |
 | Public repo + README + licence | MIT-compatible license, RU/EN docs | [LICENSE](LICENSE), [docs/](docs/) |
 | **Bonus: collision prediction** | `GET /api/collisions` with threshold + horizon | [orbital.py `predict_collisions`](backend/orbital.py), [CollisionPanel.tsx](frontend/src/components/CollisionPanel.tsx) |
@@ -153,10 +153,10 @@ Measurements taken with 15 satellites, ISL links enabled, orbital tracks visible
 |---|---|
 | Object pooling (Three.js geometries/materials) | Reduces GC pauses, stable frame times / Снижение пауз GC |
 | Client-side SGP4 (`satellite.js`) | Eliminates network latency per frame / Без сетевой задержки |
-| Adaptive DPR (device pixel ratio) | Auto-adjusts resolution to maintain target FPS / Автоподстройка разрешения |
+| Measurement-driven adaptive DPR | Drops `gl.setPixelRatio` one step when median FPS dips below 45 over a 1 s window / Снижение DPR при провале FPS |
 | Throttled ISL recalculation | LOS checks every 2nd frame on low-end devices / Проверки LOS через кадр |
 | Shared `simClock` | Single time source — no redundant Date.now() calls / Единый источник времени |
-| Instanced rendering for orbit tracks | One draw call per constellation / Один draw call на группировку |
+| Pre-allocated `Line` pool for ISL | Reuses 120 BufferGeometry slots; no per-frame allocations / Без аллокаций в кадре |
 
 ### Test Stand / Стенд для замеров
 
@@ -222,13 +222,26 @@ uvicorn main:app --reload --port 8000
 
 ```bash
 cd frontend
-npm install
+npm install                    # Uses package-lock.json — exact dependency pin
 npm run dev                    # -> http://localhost:3000
 ```
 
 Frontend auto-proxies `/api/*` to `localhost:8000` (configured in `vite.config.ts`).
 
 Фронтенд автоматически проксирует `/api/*` на `localhost:8000` (настроено в `vite.config.ts`).
+
+### Docker (one command for both services) / Docker (один шаг)
+
+```bash
+docker compose up --build
+# -> Frontend on http://localhost:3000, backend on http://localhost:8000
+```
+
+The `docker compose up` flow guarantees identical Node/Python versions
+across machines and is the recommended path for jury reproduction.
+
+`docker compose up` гарантирует одинаковые версии Node/Python и
+является рекомендованным способом воспроизведения для жюри.
 
 ---
 
@@ -304,16 +317,19 @@ StarVision/
 
 | Method / Метод | URL | Description / Описание |
 |---|---|---|
-| GET | `/api/health` | Liveness + catalog + CelesTrak cache age / Статус |
-| GET | `/api/satellites` | List of all 15 spacecraft / Список всех 15 КА |
-| GET | `/api/positions` | Current ECI coordinates (operational only) / Позиции |
-| GET | `/api/tle?source=embedded\|celestrak` | TLE + meta (effective source, live/fallback counts) |
+| GET | `/api/health` | Liveness + catalog + CelesTrak cache age / Статус, каталог, кэш |
+| GET | `/api/satellites` | All spacecraft (operational + archival) / Все КА (активные + архивные) |
+| GET | `/api/satellites/{norad_id}` | One spacecraft / Один КА |
+| GET | `/api/positions` | Current ECI/geo (operational only) / Позиции операционных КА |
+| GET | `/api/tle?source=embedded\|celestrak` | TLE + meta (effective_source, live/fallback) |
+| GET | `/api/tle/status` | TLE cache snapshot / Снапшот кэша TLE |
 | POST | `/api/tle/refresh` | Force refresh TLE cache from CelesTrak |
-| GET | `/api/orbit/{norad_id}` | Orbital track — 409 for archival / трек, 409 для архивных |
-| GET | `/api/links?comm_range_km=2000` | ISL with LOS check, 50–2000 km range |
+| GET | `/api/orbit/{norad_id}` | Orbital track — 409 for archival / Трек, 409 для архивных |
+| GET | `/api/orbits` | Batch tracks for all operational satellites / Батч-выгрузка |
+| GET | `/api/links?comm_range_km=2000` | ISL + connectivity analytics (50–2000 km) |
 | GET | `/api/orbital-elements/{norad_id}` | Keplerian elements — 409 for archival |
 | GET | `/api/collisions` | Close approach predictions / Прогноз сближений |
-| GET | `/api/optimize-planes` | Walker-δ optimiser / Оптимизатор Walker |
+| GET | `/api/optimize-planes` | Walker-δ T/P/F optimiser w/ coverage objective |
 | POST | `/api/starai/chat` | StarAI chat with JSON UI commands / Чат StarAI |
 | GET | `/api/config` | Initial frontend config / Конфигурация фронтенда |
 

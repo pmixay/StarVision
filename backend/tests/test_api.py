@@ -214,8 +214,19 @@ async def test_optimize_planes(client):
     resp = await client.get("/api/optimize-planes?num_satellites=12&num_planes=3&altitude_km=550")
     assert resp.status_code == 200
     data = resp.json()
-    assert data["walker_notation"] == "12/3/1"
+    # T=12 / P=3 — exact F is determined by the coverage objective and
+    # may shift if the score weights change. We only assert the
+    # invariants: T/P stay as requested, F lies in [0, P-1], the
+    # planes count matches, and the objective block is populated.
+    assert data["total_satellites"] == 12
+    assert data["num_planes"] == 3
+    assert 0 <= data["phase_factor"] <= data["num_planes"] - 1
+    assert data["walker_notation"] == f"12/3/{data['phase_factor']}"
     assert len(data["planes"]) == 3
+    assert "objective" in data
+    obj = data["objective"]
+    assert 0.0 <= obj["score"] <= 1.0
+    assert obj["candidates_evaluated"] == 3
 
 
 @pytest.mark.asyncio

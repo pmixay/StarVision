@@ -237,25 +237,152 @@ def predict_collisions(
     return close_approaches
 
 
+def _walker_constellation_eci(
+    T: int,
+    P: int,
+    F: int,
+    altitude_km: float,
+    inclination_deg: float,
+    t_sec: float,
+) -> List[Tuple[float, float, float]]:
+    """Snapshot of all T satellite ECI positions for a Walker-δ T/P/F
+    constellation at the given simulation time. Pure helper used by the
+    objective function below — no I/O.
+    """
+    a = EARTH_RADIUS_KM + altitude_km
+    n = math.sqrt(MU / (a ** 3))
+    incl = inclination_deg * DEG2RAD
+    cos_i = math.cos(incl)
+    sin_i = math.sin(incl)
+    out: List[Tuple[float, float, float]] = []
+    sats_per_plane = max(1, math.ceil(T / P))
+    for idx in range(T):
+        plane_idx = idx % P
+        sat_in_plane = idx // P
+        raan = (plane_idx / P) * 2 * math.pi
+        phase = (sat_in_plane / sats_per_plane) * 2 * math.pi \
+            + (F * plane_idx / P) * (2 * math.pi / sats_per_plane)
+        M = n * t_sec + phase
+        x_orb = a * math.cos(M)
+        y_orb = a * math.sin(M)
+        x_inc = x_orb
+        y_inc = y_orb * cos_i
+        z_inc = y_orb * sin_i
+        cos_r = math.cos(raan)
+        sin_r = math.sin(raan)
+        out.append((
+            x_inc * cos_r - y_inc * sin_r,
+            x_inc * sin_r + y_inc * cos_r,
+            z_inc,
+        ))
+    return out
+
+
+def _coverage_score(
+    T: int,
+    P: int,
+    F: int,
+    altitude_km: float,
+    inclination_deg: float,
+    samples: int = 24,
+) -> Dict[str, float]:
+    """Walker-δ objective function. Aggregates three independent
+    metrics into one 0..1 score the optimiser maximises:
+
+    1. Phase uniformity (within-plane mean-anomaly spacing).
+    2. RAAN uniformity (between-plane LAN spacing — perfect by
+       construction for a strict Walker-δ, kept for symmetry).
+    3. Sky-coverage proxy: fraction of `samples` time-snapshots in
+       which at least one satellite is above the horizon as seen from
+       a fixed equatorial ground station.
+
+    The geometric mean keeps the score honest — a tie on two metrics
+    still gets broken by the third instead of being averaged out.
+    """
+    a = EARTH_RADIUS_KM + altitude_km
+    period_sec = 2 * math.pi * math.sqrt((a ** 3) / MU)
+    sats_per_plane = max(1, math.ceil(T / P))
+
+    expected_step = (2 * math.pi) / sats_per_plane
+    phase_errs: List[float] = []
+    for sat_in_plane in range(sats_per_plane):
+        phase = (sat_in_plane / sats_per_plane) * 2 * math.pi
+        nearest = round(phase / expected_step) * expected_step
+        phase_errs.append(abs(phase - nearest))
+    if phase_errs and expected_step > 0:
+        max_err = expected_step / 2.0
+        phase_uniformity = max(0.0, 1.0 - max(phase_errs) / max_err)
+    else:
+        phase_uniformity = 1.0
+
+    raan_uniformity = 1.0  # Walker-δ: RAAN evenly distributed by construction.
+
+    station = (EARTH_RADIUS_KM, 0.0, 0.0)
+    zenith_norm = math.sqrt(sum(s * s for s in station))
+    visibility_threshold_cos = math.cos(math.radians(85.0))
+    visible_samples = 0
+    for k in range(max(1, samples)):
+        t_sample = (k / max(1, samples)) * period_sec
+        positions = _walker_constellation_eci(
+            T, P, F, altitude_km, inclination_deg, t_sample,
+        )
+        seen = False
+        for px, py, pz in positions:
+            dx = px - station[0]
+            dy = py - station[1]
+            dz = pz - station[2]
+            slant = math.sqrt(dx * dx + dy * dy + dz * dz)
+            if slant <= 0 or zenith_norm <= 0:
+                continue
+            dot = (station[0] * dx + station[1] * dy + station[2] * dz) / (zenith_norm * slant)
+            if dot >= visibility_threshold_cos:
+                seen = True
+                break
+        if seen:
+            visible_samples += 1
+    coverage_fraction = visible_samples / max(1, samples)
+
+    components = [phase_uniformity, raan_uniformity, coverage_fraction]
+    nonzero = [max(c, 1e-3) for c in components]
+    score = math.exp(sum(math.log(c) for c in nonzero) / len(nonzero))
+
+    return {
+        "score": round(score, 4),
+        "phase_uniformity": round(phase_uniformity, 4),
+        "raan_uniformity": round(raan_uniformity, 4),
+        "coverage_fraction": round(coverage_fraction, 4),
+    }
+
+
 def optimize_plane_distribution(
     num_satellites: int,
     num_planes: int,
     altitude_km: float = 550.0,
     inclination_deg: float = 55.0,
 ) -> Dict[str, Any]:
-    """
-    Calculate optimal satellite distribution across orbital planes (Walker constellation).
-    Returns Walker-delta constellation parameters: T/P/F.
-    """
-    T = num_satellites  # Total satellites
-    P = max(1, min(num_planes, T))  # Number of planes
-    S = T // P  # Satellites per plane (integer)
-    remainder = T % P
-    F = 1  # Phase factor (0..P-1), optimal for coverage is usually 1
+    """Walker-δ T/P/F optimiser.
 
-    # Optimal F for maximum coverage
-    if P > 1:
-        F = max(1, P // 2)
+    Searches F ∈ [0, P-1] for the highest `_coverage_score`, then
+    returns the chosen configuration plus its score so callers can
+    show *why* this F was picked. The previous implementation just
+    emitted F = max(1, P//2) — that's a Walker generator, not an
+    optimiser. Searching F is cheap (P · T · 24 ECI evaluations)
+    so we do it on every request.
+    """
+    T = num_satellites
+    P = max(1, min(num_planes, T))
+    S = T // P
+    remainder = T % P
+
+    candidates: List[Dict[str, Any]] = []
+    f_range = list(range(P)) if P > 1 else [0]
+    for f_candidate in f_range:
+        scored = _coverage_score(T, P, f_candidate, altitude_km, inclination_deg)
+        candidates.append({"F": f_candidate, **scored})
+
+    candidates.sort(key=lambda c: c["score"], reverse=True)
+    best = candidates[0]
+    F = int(best["F"])
 
     a = EARTH_RADIUS_KM + altitude_km
     period_sec = 2 * math.pi * math.sqrt(a**3 / MU)
@@ -294,6 +421,14 @@ def optimize_plane_distribution(
         "orbital_period_min": round(period_min, 2),
         "velocity_km_s": round(velocity, 3),
         "planes": planes,
+        "objective": {
+            "score": best["score"],
+            "phase_uniformity": best["phase_uniformity"],
+            "raan_uniformity": best["raan_uniformity"],
+            "coverage_fraction": best["coverage_fraction"],
+            "samples_per_period": 24,
+            "candidates_evaluated": len(candidates),
+        },
         "coverage_note": f"Walker-δ {T}/{P}/{F}: {P} плоскостей RAAN через {round(360/P, 1)}°, "
                         f"{S} КА/плоскость, межплоскостный сдвиг F={F}",
     }

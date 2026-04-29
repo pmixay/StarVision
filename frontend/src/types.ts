@@ -120,12 +120,14 @@ export interface AppState {
   commRangeKm: number;       // communication range threshold (50–2000 km per spec)
   activeLinksCount: number;  // current number of active ISL
   orbitalPlanes: number;     // number of orbital planes (1–7)
+  orbitInclinationDeg: number; // virtual Walker inclination (0..180°)
 
   // Data-trust metadata
   tleMeta: TleResponseMeta | null;
   backendHealth: APIHealthResponse | null;
   backendReachable: boolean;
   lastHealthCheckAt: number | null;
+  networkAnalytics: NetworkAnalytics | null;
 
   // Event log / notifications
   events: AppEvent[];
@@ -154,11 +156,13 @@ export interface AppState {
   setCommRangeKm: (km: number) => void;
   setActiveLinksCount: (count: number) => void;
   setOrbitalPlanes: (planes: number) => void;
+  setOrbitInclinationDeg: (deg: number) => void;
   setChatOpen: (open: boolean) => void;
   addChatMessage: (msg: ChatMessage) => void;
   setChatLoading: (loading: boolean) => void;
   setTleMeta: (meta: TleResponseMeta | null) => void;
   setBackendHealth: (health: APIHealthResponse | null, reachable: boolean) => void;
+  setNetworkAnalytics: (n: NetworkAnalytics | null) => void;
   setUserError: (err: string | null) => void;
   logEvent: (event: Omit<AppEvent, 'id' | 'timestamp'>) => void;
   clearEvents: () => void;
@@ -255,6 +259,36 @@ export interface APIChatResponse {
   rejected_actions?: string[];
 }
 
+export interface NetworkAnalytics {
+  connected_components: number;
+  largest_component_size: number;
+  avg_degree: number;
+  diameter: number | null;
+  is_connected: boolean;
+}
+
+export interface APILinksResponse {
+  links: Array<{
+    norad_id_1: number;
+    norad_id_2: number;
+    name_1: string;
+    name_2: string;
+    distance_km: number;
+    los: boolean;
+    connected: boolean;
+  }>;
+  active_count: number;
+  total_pairs: number;
+  satellites_count: number;
+  blocked_by_earth: number;
+  in_range_no_los: number;
+  comm_range_km: number;
+  network?: NetworkAnalytics;
+  timestamp: string;
+  source: string;
+  meta?: TleResponseMeta;
+}
+
 export interface CollisionApproach {
   norad_id_1: number;
   name_1: string;
@@ -281,6 +315,15 @@ export interface OptimizerPlane {
   satellites: Array<{ index: number; mean_anomaly_deg: number }>;
 }
 
+export interface APIOptimizerObjective {
+  score: number;
+  phase_uniformity: number;
+  raan_uniformity: number;
+  coverage_fraction: number;
+  samples_per_period: number;
+  candidates_evaluated: number;
+}
+
 export interface APIOptimizerResponse {
   walker_notation: string;
   total_satellites: number;
@@ -292,5 +335,7 @@ export interface APIOptimizerResponse {
   orbital_period_min: number;
   velocity_km_s: number;
   planes: OptimizerPlane[];
+  /** Present when the backend evaluated the F-search objective. */
+  objective?: APIOptimizerObjective;
   coverage_note: string;
 }
