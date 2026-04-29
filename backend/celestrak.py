@@ -15,36 +15,20 @@ import httpx
 
 from satellites import RUSSIAN_CUBESATS, is_operational
 
-# Detect HTTP/2 support once at import time. requirements.txt asks for
-# httpx[http2], but if h2 is missing locally we degrade to HTTP/1.1
-# rather than crashing on first /api/tle?source=celestrak.
-try:
-    import h2  # noqa: F401
-
-    _HTTP2_AVAILABLE = True
-except ImportError:
-    _HTTP2_AVAILABLE = False
-
 logger = logging.getLogger(__name__)
 
-# Primary group endpoints (CelesTrak).
-# `active` carries every operational spacecraft (~45k entries, ~1.7 MB) —
-# every Russian university CubeSat we ship with is in it. We previously
-# queried `cubesat` + `amateur`, but those groups miss most Russian
-# CubeSats (e.g. the entire 2024-11-05 Vostochny launch is in `active`
-# only) which is why production saw "2/15 LIVE": the per-NORAD fallback
-# requests then ate the 6 s wall-clock budget before they could fill
-# the gap. `amateur` is kept as a smaller secondary feed for redundancy.
-CELESTRAK_URLS = [
-    "https://celestrak.org/NORAD/elements/gp.php?GROUP=active&FORMAT=tle",
-    "https://celestrak.org/NORAD/elements/gp.php?GROUP=amateur&FORMAT=tle",
-]
+# Per-NORAD CATNR endpoint template. Our catalog is a small, fixed set
+# (~15 IDs), so we query each satellite directly instead of downloading
+# the 1.7 MB `active` group file. Direct CATNR responses are tiny
+# (~150 B each) and 15 parallel requests typically resolve in well under
+# 2 s, even on slow links — far more reliable than racing a multi-MB
+# download against a tight wall-clock budget.
+CELESTRAK_CATNR_URL = "https://celestrak.org/NORAD/elements/gp.php?CATNR={norad_id}&FORMAT=tle"
 
-# Mirror endpoints used when CelesTrak is unreachable (e.g. blocked from
-# the user's network). AMSAT publishes amateur-band TLEs in plain TLE
-# format and is reachable from networks where celestrak.org is not. It
-# only covers a subset of the catalog, but partial live data is strictly
-# better than the "0/N live" state we'd otherwise show.
+# Mirror endpoints used as a redundant secondary feed. AMSAT publishes
+# amateur-band TLEs in plain TLE format and is reachable from networks
+# where celestrak.org is occasionally blocked. It only covers a subset
+# of the catalog, but partial live data is strictly better than nothing.
 MIRROR_URLS = [
     "https://www.amsat.org/tle/current/nasabare.txt",
 ]
@@ -52,12 +36,25 @@ MIRROR_URLS = [
 # TLE data cache: norad_id -> (tle_line1, tle_line2)
 CACHE_TTL_SEC = 3600  # refresh every hour
 
-# Hard ceiling on a single CelesTrak fetch wall-clock cost. httpx's per-
-# request connect timeout interacts with HTTP/2 and DNS retries in ways
-# that can stretch a cold "blocked host" fetch to tens of seconds. A 6 s
-# budget guarantees the user sees feedback fast — anything that arrived
-# before the deadline is still committed to the cache.
-FETCH_WALL_CLOCK_BUDGET_SEC = 6.0
+# Hard ceiling on a single CelesTrak fetch wall-clock cost. With per-NORAD
+# queries the entire 15-satellite batch typically lands in 4–8 s; we
+# keep a generous 12 s cap so a brief 503 storm + retries still finishes
+# inside the budget instead of leaving the cache half-populated.
+FETCH_WALL_CLOCK_BUDGET_SEC = 12.0
+
+# CelesTrak rate-limits aggressive parallel callers — once we cross
+# roughly a dozen concurrent CATNR requests from the same IP, a sizeable
+# fraction comes back as 503 Service Unavailable or read-timeout.
+# Capping concurrency at 8 keeps the entire 15-satellite batch under
+# 5 s wall-clock while still landing 15/15 on flaky links.
+CELESTRAK_MAX_CONCURRENCY = 8
+
+# Per-request retry budget for transient upstream conditions (HTTP 429 /
+# 503 / network timeout). Two retries with a short backoff are enough to
+# rescue the occasional satellite the rate-limiter knocks out without
+# multiplying the wall-clock cost.
+CELESTRAK_RETRIES = 2
+CELESTRAK_RETRY_BACKOFF_SEC = 0.4
 
 _tle_cache: dict[int, tuple[str, str]] = {}
 _cache_timestamp: float = 0.0
@@ -227,7 +224,6 @@ async def fetch_celestrak_tle(norad_ids: list[int] | None = None) -> dict[int, t
     * The cache mutex (`_get_cache_lock()`) is only held while deciding whether
       to start a new fetch — never during the HTTP wait.
     """
-    global _tle_cache, _cache_timestamp, _last_fetch_ok, _last_fetch_error, _last_fetch_attempt
     global _inflight_fetch
 
     if norad_ids is None:
@@ -276,7 +272,7 @@ async def _run_celestrak_fetch(
 ) -> None:
     """Worker that performs the actual CelesTrak round-trip.
     Always settles `future` (so awaiters wake up) and resets `_inflight_fetch`."""
-    global _tle_cache, _cache_timestamp, _last_fetch_ok, _last_fetch_error, _last_fetch_attempt
+    global _cache_timestamp, _last_fetch_ok, _last_fetch_error, _last_fetch_attempt
     global _inflight_fetch
 
     all_tle: dict[int, tuple[str, str]] = {}
@@ -285,62 +281,62 @@ async def _run_celestrak_fetch(
     _last_fetch_attempt = time.time()
     # Per-task outcome counters so we can emit a single summary line
     # instead of N tracebacks when CelesTrak is blocked.
-    outcomes: dict[str, int] = {"ok": 0, "empty": 0, "network": 0, "http": 0, "other": 0}
+    outcomes: dict[str, int] = {
+        "ok": 0,
+        "empty": 0,
+        "network": 0,
+        "transient": 0,
+        "http": 0,
+        "other": 0,
+    }
 
     try:
         try:
-            # Two-phase parallel fetch:
-            #   1. Group endpoints (`active` is exhaustive for current
-            #      Russian CubeSats; `amateur` and the AMSAT mirror are
-            #      kept as cheap secondary feeds for redundancy).
-            #   2. Per-NORAD CATNR fallback ONLY for IDs that were still
-            #      missing after phase 1 — usually empty.
-            # Phase 1 alone covers our entire active catalog, so the
-            # 2024 "groups first, then 17 individuals" plan was wasted
-            # work that ate the wall-clock budget. Per-request timeout
-            # is bounded so a single slow CelesTrak response cannot
-            # hold the cache lock for tens of seconds.
-            # connect=3s: when CelesTrak is blocked at the network edge
-            # (common from RU networks), every connection attempt times
-            # out; a 3 s budget makes the whole "tried, failed, falling
-            # back to embedded" loop feel snappy instead of frozen.
-            timeout = httpx.Timeout(connect=3.0, read=12.0, write=5.0, pool=5.0)
-            limits = httpx.Limits(max_connections=8, max_keepalive_connections=4)
+            # Strategy: fan out one CATNR request per catalog NORAD ID,
+            # capped at CELESTRAK_MAX_CONCURRENCY to stay below the
+            # provider's rate-limit threshold (above ~12 simultaneous
+            # callers a sizeable fraction comes back as 503). The AMSAT
+            # mirror runs in parallel as an independent redundancy.
+            # HTTP/2 is intentionally disabled: multiplexing 15 tiny
+            # requests over one stream often serialises under load and
+            # makes the slowest response the global tail latency.
+            timeout = httpx.Timeout(connect=3.0, read=4.0, write=5.0, pool=5.0)
+            limits = httpx.Limits(
+                max_connections=CELESTRAK_MAX_CONCURRENCY + len(MIRROR_URLS),
+                max_keepalive_connections=CELESTRAK_MAX_CONCURRENCY,
+            )
             async with httpx.AsyncClient(
                 timeout=timeout,
-                http2=_HTTP2_AVAILABLE,
+                http2=False,
                 limits=limits,
                 follow_redirects=True,
             ) as client:
-                # Wrap as Tasks so we can harvest finished work after a
-                # wall-clock timeout. Without explicit Task wrapping a
-                # cancelled gather would discard partial results.
-                tasks: list[asyncio.Task] = []
-                for url in CELESTRAK_URLS:
-                    tasks.append(asyncio.create_task(_fetch_url(client, url)))
+                semaphore = asyncio.Semaphore(CELESTRAK_MAX_CONCURRENCY)
+                tasks: list[asyncio.Task] = [
+                    asyncio.create_task(
+                        _fetch_url_with_retry(
+                            client,
+                            CELESTRAK_CATNR_URL.format(norad_id=nid),
+                            semaphore=semaphore,
+                        )
+                    )
+                    for nid in norad_ids
+                ]
                 for url in MIRROR_URLS:
                     tasks.append(asyncio.create_task(_fetch_url(client, url)))
-                # Per-NORAD fallback ONLY for the entries the group files
-                # didn't return. Computed after the group fetches finish
-                # so we don't waste a request on every satellite when
-                # `active` already covers the whole catalog.
                 logger.info(
-                    "TLE fetch: %d total requests in parallel (CelesTrak + mirrors)",
-                    len(tasks),
+                    "TLE fetch: %d per-NORAD CATNR (max %d in flight) + %d mirror requests",
+                    len(norad_ids),
+                    CELESTRAK_MAX_CONCURRENCY,
+                    len(MIRROR_URLS),
                 )
-                fetch_started = time.monotonic()
-                # Phase 1 takes the larger slice so the cheap group
-                # feeds get a chance to land before we even consider
-                # per-NORAD fallback.
-                phase1_budget = FETCH_WALL_CLOCK_BUDGET_SEC * 0.7
                 done, pending = await asyncio.wait(
                     tasks,
-                    timeout=phase1_budget,
+                    timeout=FETCH_WALL_CLOCK_BUDGET_SEC,
                 )
                 cancelled = len(pending)
-                if pending:
-                    for fut in pending:
-                        fut.cancel()
+                for fut in pending:
+                    fut.cancel()
 
                 for fut in done:
                     parsed, kind = fut.result()
@@ -349,57 +345,22 @@ async def _run_celestrak_fetch(
                         for nid, tle in parsed.items():
                             if nid in target_set:
                                 all_tle[nid] = tle
-                # Phase 2: cover any catalog entries the group feeds
-                # missed (e.g. fresh launches not yet propagated into
-                # CelesTrak's group files) with per-NORAD lookups.
-                # Empty in the typical case — the active group covers
-                # everything we ship.
-                missing = [nid for nid in norad_ids if nid not in all_tle]
-                phase2_budget = max(
-                    0.0,
-                    FETCH_WALL_CLOCK_BUDGET_SEC - (time.monotonic() - fetch_started),
-                )
-                if missing and phase2_budget > 0.5:
-                    phase2_tasks = [
-                        asyncio.create_task(
-                            _fetch_url(
-                                client,
-                                f"https://celestrak.org/NORAD/elements/gp.php?CATNR={nid}&FORMAT=tle",
-                            )
-                        )
-                        for nid in missing
-                    ]
-                    p2_done, p2_pending = await asyncio.wait(
-                        phase2_tasks,
-                        timeout=phase2_budget,
-                    )
-                    for fut in p2_pending:
-                        fut.cancel()
-                    cancelled += len(p2_pending)
-                    for fut in p2_done:
-                        parsed, kind = fut.result()
-                        outcomes[kind] = outcomes.get(kind, 0) + 1
-                        if parsed:
-                            for nid, tle in parsed.items():
-                                if nid in target_set:
-                                    all_tle[nid] = tle
-                # Any non-success outcome whose root cause was network
-                # (timeout / DNS / refused) means we should report
-                # `network_error` to the client even if a partial result
-                # squeaked through from a mirror.
-                if outcomes["network"] > 0:
+
+                # Network-class outcomes (timeout / DNS / refused) signal
+                # upstream trouble even if some responses squeaked
+                # through; the client still gets whatever landed.
+                if outcomes["network"] > 0 or outcomes["transient"] > 0:
                     network_error = ERR_NETWORK
-                # Single, traceback-free summary. INFO when we got data,
-                # WARNING when nothing landed — distinguishes "slow but
-                # working" from "fully unreachable" at a glance.
                 level = logging.INFO if all_tle else logging.WARNING
                 logger.log(
                     level,
                     "TLE fetch summary: %d ok, %d empty, %d network-error, "
-                    "%d http-error, %d other-error, %d cancelled (budget %.1fs)",
+                    "%d transient, %d http-error, %d other-error, "
+                    "%d cancelled (budget %.1fs)",
                     outcomes["ok"],
                     outcomes["empty"],
                     outcomes["network"],
+                    outcomes["transient"],
                     outcomes["http"],
                     outcomes["other"],
                     cancelled,
@@ -472,6 +433,12 @@ async def _fetch_url(
         # 404 is normal for individual NORAD lookups — sat may be deorbited
         # or simply absent from CelesTrak's catalog. Not an error.
         return {}, "empty"
+    if resp.status_code in (429, 503):
+        # Transient: CelesTrak rate-limited us or the upstream pool is
+        # momentarily exhausted. Mark as `transient` so the retry
+        # wrapper knows it's worth another shot.
+        logger.debug("CelesTrak HTTP %d (transient) for %s", resp.status_code, url)
+        return {}, "transient"
     if resp.status_code >= 400:
         logger.debug("CelesTrak HTTP %d for %s", resp.status_code, url)
         return {}, "http"
@@ -486,6 +453,36 @@ async def _fetch_url(
         return {}, "empty"
     logger.debug("Fetched %d TLE entries from %s", len(parsed), url.split("?")[0])
     return parsed, "ok"
+
+
+async def _fetch_url_with_retry(
+    client: httpx.AsyncClient,
+    url: str,
+    semaphore: asyncio.Semaphore,
+) -> tuple[dict[int, tuple[str, str]], str]:
+    """Concurrency-limited single-URL fetch with retry on transient
+    upstream failure (network blip or HTTP 503/429 from CelesTrak's
+    rate limiter). Returns the same `(parsed, outcome)` shape as
+    `_fetch_url` so the coordinator's aggregation logic is unchanged.
+    """
+    async with semaphore:
+        last_outcome: tuple[dict[int, tuple[str, str]], str] = ({}, "other")
+        for attempt in range(CELESTRAK_RETRIES + 1):
+            parsed, outcome = await _fetch_url(client, url)
+            if outcome == "ok":
+                return parsed, outcome
+            last_outcome = (parsed, outcome)
+            # Only retry the genuinely transient classes — a 4xx (other
+            # than 429) won't get any better and burning the retry budget
+            # on it would just delay the wall-clock cap for everyone else.
+            if outcome in ("network", "transient") and attempt < CELESTRAK_RETRIES:
+                # Linear backoff is enough — the goal is to side-step a
+                # short rate-limit window, not to ride out a sustained
+                # outage (the wall-clock budget will cancel us first).
+                await asyncio.sleep(CELESTRAK_RETRY_BACKOFF_SEC * (attempt + 1))
+                continue
+            return parsed, outcome
+        return last_outcome
 
 
 async def get_tle_by_source(source: str = "embedded") -> dict[str, object]:

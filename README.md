@@ -12,7 +12,7 @@
 >
 > Интерактивный 3D-прототип цифрового двойника группировки CubeSat
 
-- **Live Demo / Публичный деплой:** http://78.17.40.155/
+- **Live Demo / Публичный деплой:** https://starvision.pichotin.ru/
 - **Source / Исходный код:** https://github.com/molotokmephi/starvision
 - **Issues / Баги и идеи:** https://github.com/molotokmephi/starvision/issues
 
@@ -528,7 +528,7 @@ StarVision/
 
 | Project / Проект | Description / Описание |
 |---|---|
-| [Live Demo](http://78.17.40.155/) | Public deployment / Публичный деплой |
+| [Live Demo](https://starvision.pichotin.ru/) | Public deployment / Публичный деплой |
 | [Stuff in Space](https://stuffin.space) | Interactive satellite map on Three.js |
 | [NASA Eyes on the Earth](https://eyes.nasa.gov/apps/earth) | NASA satellite 3D visualization |
 | [CesiumJS](https://cesium.com/platform/cesiumjs) | 3D globe with satellite animation |

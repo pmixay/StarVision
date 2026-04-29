@@ -3,7 +3,7 @@
 > **Hackathon: Digital Twins of Space Systems**
 > Interactive 3D prototype of a CubeSat constellation digital twin
 
-**Live Demo:** http://78.17.40.155/
+**Live Demo:** https://starvision.pichotin.ru/
 
 ---
 
@@ -252,7 +252,7 @@ For full architectural documentation with Mermaid diagrams, see **[ARCHITECTURE.
 
 | Project | Description |
 |---|---|
-| [Live Demo](http://78.17.40.155/) | Public deployment |
+| [Live Demo](https://starvision.pichotin.ru/) | Public deployment |
 | [Stuff in Space](https://stuffin.space) | Interactive satellite map on Three.js |
 | [NASA Eyes on the Earth](https://eyes.nasa.gov/apps/earth) | NASA satellite 3D visualization |
 | [CesiumJS](https://cesium.com/platform/cesiumjs) | 3D globe with satellite animation |

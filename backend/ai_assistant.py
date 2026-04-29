@@ -142,26 +142,15 @@ def validate_actions(actions: list[Any]) -> tuple[list[dict[str, Any]], list[str
     return accepted, rejected
 
 
-# Anthropic API (via HTTP, no SDK — for simplicity)
-ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
-ANTHROPIC_DEFAULT_MODEL = "claude-sonnet-4-20250514"
-
-# OpenRouter — OpenAI-compatible gateway. The key is stored server-side in
-# backend/.env so the browser never receives or forwards it.
+# OpenRouter — OpenAI-compatible gateway and the sole upstream LLM
+# provider for StarAI. The key is stored server-side in backend/.env so
+# the browser never receives or forwards it.
 OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
 OPENROUTER_MODEL = "openai/gpt-oss-120b"
 
 
 def _env(name: str) -> str:
     return os.getenv(name, "").strip()
-
-
-def _get_anthropic_api_key() -> str:
-    return _env("ANTHROPIC_API_KEY")
-
-
-def _get_anthropic_model() -> str:
-    return _env("ANTHROPIC_MODEL") or ANTHROPIC_DEFAULT_MODEL
 
 
 def _get_openrouter_api_key() -> str:
@@ -298,45 +287,6 @@ def _parse_ai_response(text: str) -> dict[str, Any] | None:
     return _scan_first_ai_response_object(text)
 
 
-async def _ask_anthropic(
-    user_message: str,
-    history: list[dict[str, str]],
-    lang: str,
-    api_key: str,
-) -> dict[str, Any]:
-    messages = list(history) + [{"role": "user", "content": user_message}]
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        response = await client.post(
-            ANTHROPIC_API_URL,
-            headers={
-                "x-api-key": api_key,
-                "anthropic-version": "2023-06-01",
-                "content-type": "application/json",
-            },
-            json={
-                "model": _get_anthropic_model(),
-                "max_tokens": 1024,
-                "system": _build_system_prompt(lang),
-                "messages": messages,
-            },
-        )
-        response.raise_for_status()
-        data = response.json()
-
-    text = "".join(
-        block.get("text", "") for block in data.get("content", []) if block.get("type") == "text"
-    )
-    parsed = _parse_ai_response(text)
-    if parsed is None:
-        return _wrap_response(text, [], lang=lang, source="anthropic")
-    return _wrap_response(
-        _response_message(parsed, text),
-        parsed.get("actions", []),
-        lang=lang,
-        source="anthropic",
-    )
-
-
 async def _ask_openrouter(
     user_message: str,
     history: list[dict[str, str]],
@@ -431,30 +381,23 @@ async def ask_starai(
 
     Provider routing:
     - server-side OPENROUTER_API_KEY -> OpenRouter with fixed model
-    - server-side ANTHROPIC_API_KEY -> Claude direct fallback
     - otherwise → offline fallback (canned responses)
+
+    OpenRouter is the only supported upstream provider. There is no
+    Anthropic fallback by design: the deployment expects exactly one
+    LLM source so we never silently route a user message to a different
+    backend.
     """
     history = list(conversation_history or [])
 
-    # 1. Server-side OpenRouter key from backend/.env.
     openrouter_key = _get_openrouter_api_key()
     if openrouter_key:
         try:
             return await _ask_openrouter(user_message, history, lang, openrouter_key, None)
         except Exception:
             logging.exception("StarAI OpenRouter call failed")
-            # Fall through to Anthropic fallback or offline mode.
+            # Fall through to offline canned responses.
 
-    # 2. Server-side Anthropic key as fallback.
-    anthropic_key = _get_anthropic_api_key()
-    if anthropic_key:
-        try:
-            return await _ask_anthropic(user_message, history, lang, anthropic_key)
-        except Exception:
-            logging.exception("StarAI Anthropic call failed")
-            # Fall through to offline.
-
-    # 3. Fallback canned responses.
     raw = _fallback_response(user_message, lang)
     return _wrap_response(
         raw.get("message", ""),
