@@ -56,8 +56,9 @@ export function CollisionPanel() {
       pushToast({ level: 'error', title: t('event.apiError', lang), detail });
       logEvent({ level: 'error', kind: 'api_error', message: 'fetchCollisions failed', details: detail });
     } finally {
-      if (requestId !== requestSeqRef.current) return;
-      setLoading(false);
+      if (requestId === requestSeqRef.current) {
+        setLoading(false);
+      }
     }
   };
 

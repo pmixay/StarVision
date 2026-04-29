@@ -76,8 +76,8 @@ export function Header({ satelliteCount, activeCount, timeSpeed, activeLinksCoun
         {/* Logo — offset to avoid overlap with control panel */}
         <div className="pointer-events-auto flex items-center gap-3 ml-[310px]">
           <div className="relative">
-            <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-star-500 via-star-600 to-star-800 flex items-center justify-center shadow-lg shadow-star-600/30">
-              <span className="text-white font-display font-extrabold text-sm">SV</span>
+            <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-star-500/20 via-star-600/15 to-star-900/30 flex items-center justify-center shadow-lg shadow-star-600/30 ring-1 ring-star-500/30">
+              <img src="/brand/logo.svg" alt="StarVision" className="w-7 h-7 drop-shadow-[0_0_6px_rgba(80,150,255,0.55)]" />
             </div>
             <div className={`absolute -top-0.5 -right-0.5 w-2.5 h-2.5 rounded-full ${
               backendReachable ? 'bg-green-400' : 'bg-red-400'

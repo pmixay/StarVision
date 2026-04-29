@@ -3,14 +3,19 @@
 import math
 from datetime import datetime, timezone
 
-from satellites import get_satellite_by_id, RUSSIAN_CUBESATS
 from orbital import (
-    propagate_satellite, propagate_all, propagate_orbit_path,
-    predict_collisions, predict_virtual_collisions, optimize_plane_distribution, _virtual_eci,
-    get_orbital_elements, eci_to_geodetic,
     EARTH_RADIUS_KM,
+    _virtual_eci,
+    eci_to_geodetic,
+    get_orbital_elements,
+    optimize_plane_distribution,
+    predict_collisions,
+    predict_virtual_collisions,
+    propagate_all,
+    propagate_orbit_path,
+    propagate_satellite,
 )
-
+from satellites import RUSSIAN_CUBESATS, get_satellite_by_id
 
 # Fixed time for reproducible tests
 TEST_TIME = datetime(2026, 4, 1, 12, 0, 0, tzinfo=timezone.utc)
@@ -58,7 +63,7 @@ class TestPropagateSatellite:
         sat = get_satellite_by_id(46493)
         result = propagate_satellite(sat, TEST_TIME)
         eci = result["eci"]
-        r = math.sqrt(eci["x"]**2 + eci["y"]**2 + eci["z"]**2)
+        r = math.sqrt(eci["x"] ** 2 + eci["y"] ** 2 + eci["z"] ** 2)
         # Radius should be Earth radius + altitude
         assert r > EARTH_RADIUS_KM
         assert r < EARTH_RADIUS_KM + 2000
@@ -70,7 +75,9 @@ class TestPropagateAll:
     def test_propagates_only_operational_satellites(self):
         results = propagate_all(TEST_TIME)
         # Archival satellites must be skipped — their TLE is stale.
-        operational = sum(1 for s in RUSSIAN_CUBESATS if s.status == "active" and s.tle_line1 and s.tle_line2)
+        operational = sum(
+            1 for s in RUSSIAN_CUBESATS if s.status == "active" and s.tle_line1 and s.tle_line2
+        )
         assert len(results) == operational
         # Explicit check: deorbited satellite is never propagated
         assert 53385 not in {r["norad_id"] for r in results}
@@ -109,7 +116,7 @@ class TestPropagateOrbitPath:
         """Orbit points should be at roughly constant radius (circular orbit)."""
         sat = get_satellite_by_id(46493)
         path = propagate_orbit_path(sat, TEST_TIME, steps=120, step_sec=60.0)
-        radii = [math.sqrt(p["x"]**2 + p["y"]**2 + p["z"]**2) for p in path]
+        radii = [math.sqrt(p["x"] ** 2 + p["y"] ** 2 + p["z"] ** 2) for p in path]
         avg_r = sum(radii) / len(radii)
         for r in radii:
             # Low eccentricity orbits: radius variation < 2%
@@ -176,7 +183,9 @@ class TestPredictVirtualCollisions:
         expected_angles = {}
         for plane in result["planes"]:
             for sat in plane["satellites"]:
-                expected_angles[sat["index"]] = (plane["raan_deg"] + sat["mean_anomaly_deg"]) % 360.0
+                expected_angles[sat["index"]] = (
+                    plane["raan_deg"] + sat["mean_anomaly_deg"]
+                ) % 360.0
 
         for idx in range(10):
             x, y, _ = _virtual_eci(idx, 10, 550.0, 0.0, 3, 0.0)

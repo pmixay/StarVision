@@ -2,12 +2,20 @@
 __pycache__/
 *.py[cod]
 venv/
+.venv/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
 .env
+.env.local
 
 # Node
 node_modules/
 dist/
 .vite/
+coverage/
+.eslintcache
 
 # IDE
 .vscode/
@@ -17,3 +25,6 @@ dist/
 # OS
 .DS_Store
 Thumbs.db
+
+# Docker / build artefacts
+*.pid

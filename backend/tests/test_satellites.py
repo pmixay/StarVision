@@ -1,8 +1,11 @@
 """Tests for satellites.py — Russian CubeSat catalog."""
 
 from satellites import (
-    RUSSIAN_CUBESATS, SatelliteInfo,
-    get_all_satellites, get_satellite_by_id, get_tle_data,
+    RUSSIAN_CUBESATS,
+    SatelliteInfo,
+    get_all_satellites,
+    get_satellite_by_id,
+    get_tle_data,
 )
 
 EXPECTED_COUNT = 15
@@ -34,7 +37,9 @@ class TestSatelliteCatalog:
     def test_constellations_are_known(self):
         known = {"УниверСат", "МГТУ Баумана", "SPUTNIX", "Геоскан", "НИИЯФ МГУ", "Space-Pi"}
         for sat in RUSSIAN_CUBESATS:
-            assert sat.constellation in known, f"{sat.name} has unknown constellation: {sat.constellation}"
+            assert (
+                sat.constellation in known
+            ), f"{sat.name} has unknown constellation: {sat.constellation}"
 
     def test_active_satellites_have_tle(self):
         for sat in RUSSIAN_CUBESATS:
@@ -45,8 +50,12 @@ class TestSatelliteCatalog:
     def test_tle_line_lengths(self):
         for sat in RUSSIAN_CUBESATS:
             if sat.tle_line1:
-                assert len(sat.tle_line1) == 69, f"{sat.name}: TLE line 1 length = {len(sat.tle_line1)}"
-                assert len(sat.tle_line2) == 69, f"{sat.name}: TLE line 2 length = {len(sat.tle_line2)}"
+                assert (
+                    len(sat.tle_line1) == 69
+                ), f"{sat.name}: TLE line 1 length = {len(sat.tle_line1)}"
+                assert (
+                    len(sat.tle_line2) == 69
+                ), f"{sat.name}: TLE line 2 length = {len(sat.tle_line2)}"
 
     def test_no_deorbited_satellites(self):
         # Per project policy the catalog must not ship spacecraft that
@@ -75,9 +84,17 @@ class TestGetAllSatellites:
     def test_dict_keys(self):
         item = get_all_satellites()[0]
         expected_keys = {
-            "norad_id", "name", "constellation", "purpose",
-            "mass_kg", "form_factor", "launch_date", "status",
-            "operational", "archive_date", "description",
+            "norad_id",
+            "name",
+            "constellation",
+            "purpose",
+            "mass_kg",
+            "form_factor",
+            "launch_date",
+            "status",
+            "operational",
+            "archive_date",
+            "description",
         }
         assert set(item.keys()) == expected_keys
 

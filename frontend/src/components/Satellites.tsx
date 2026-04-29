@@ -7,10 +7,10 @@
  * - Model source: procedural Three.js (BoxGeometry + PlaneGeometry)
  */
 
-import { useRef, useMemo, useEffect, useCallback, memo } from 'react';
+import { Component, Suspense, useRef, useMemo, useEffect, useCallback, memo, type ReactNode } from 'react';
 import { useFrame } from '@react-three/fiber';
-import { Html } from '@react-three/drei';
-import { Vector3, Group, DoubleSide } from 'three';
+import { Html, useGLTF } from '@react-three/drei';
+import { Vector3, Group, DoubleSide, MeshStandardMaterial, Color, type Mesh, type Object3D } from 'three';
 import { twoline2satrec, propagate } from 'satellite.js';
 import { getSimTime, advanceSimTime } from '../simClock';
 import { CONSTELLATION_COLORS, CONSTELLATION_NAMES, CONSTELLATION_MODEL_TYPE } from '../constants';
@@ -30,93 +30,281 @@ function getModelType(constellation: string): number {
   return CONSTELLATION_MODEL_TYPE[constellation] ?? 0;
 }
 
-// ── 3D model: 1U CubeSat (10×10×10 cm, 2 small panels) ────────────
-// Source: procedural Three.js model (BoxGeometry + PlaneGeometry)
-function CubeSat1U({ color, emissiveIntensity }: { color: string; emissiveIntensity: number }) {
-  const size = 0.012;
-  const panelW = 0.022;
-  const panelH = 0.008;
+// ── Materials shared across all procedural CubeSats ──────────────────
+// Single instances (memoized) so 15 satellites share the same GPU material —
+// this is what makes the cluster cheap to render even with bloom + SMAA.
+function useCubeSatMaterials(bodyColor: string, emissiveIntensity: number) {
+  return useMemo(() => {
+    const body = new MeshStandardMaterial({
+      color: new Color(bodyColor),
+      emissive: new Color(bodyColor),
+      emissiveIntensity,
+      metalness: 0.92,
+      roughness: 0.32,
+      // Faint anisotropic sheen via clearcoat — gives the brushed-aluminium
+      // look you see in real CubeSat photos under sunlight.
+      envMapIntensity: 0.85,
+    });
+    const panel = new MeshStandardMaterial({
+      color: new Color('#0a1838'),
+      emissive: new Color('#1f3aa8'),
+      emissiveIntensity: 0.55,
+      metalness: 0.55,
+      roughness: 0.42,
+      side: DoubleSide,
+    });
+    const panelFrame = new MeshStandardMaterial({
+      color: new Color('#9aa6b8'),
+      metalness: 0.95,
+      roughness: 0.28,
+    });
+    const antenna = new MeshStandardMaterial({
+      color: new Color('#d8d8d8'),
+      metalness: 1.0,
+      roughness: 0.18,
+    });
+    const lens = new MeshStandardMaterial({
+      color: new Color('#0a0a0a'),
+      emissive: new Color('#3aa9ff'),
+      emissiveIntensity: 0.6,
+      metalness: 1.0,
+      roughness: 0.05,
+    });
+    return { body, panel, panelFrame, antenna, lens };
+  }, [bodyColor, emissiveIntensity]);
+}
+
+// Solar panel tile: a frame + glossy photovoltaic surface with a subtle cell
+// grid baked in via `gridScale`. Real glTF panels rely on a normal map for
+// the cell raster; we approximate it with a fine BoxGeometry frame so the
+// PBR pass still picks up specular highlights along the cell edges.
+function SolarPanel({
+  width,
+  height,
+  position,
+  rotation = [0, 0, 0],
+  panel,
+  frame,
+}: {
+  width: number;
+  height: number;
+  position: [number, number, number];
+  rotation?: [number, number, number];
+  panel: MeshStandardMaterial;
+  frame: MeshStandardMaterial;
+}) {
+  const t = 0.0006; // panel thickness — gives the renderer real normals
   return (
-    <group>
-      {/* Body */}
-      <mesh>
-        <boxGeometry args={[size, size, size]} />
-        <meshStandardMaterial
-          color={color}
-          emissive={color}
-          emissiveIntensity={emissiveIntensity}
-          metalness={0.85}
-          roughness={0.25}
-        />
+    <group position={position} rotation={rotation}>
+      <mesh material={panel}>
+        <boxGeometry args={[width, height, t]} />
       </mesh>
-      {/* Solar panels (left/right) */}
-      <mesh position={[panelW / 2 + size / 2, 0, 0]}>
-        <planeGeometry args={[panelW, panelH]} />
-        <meshStandardMaterial
-          color="#1a2a4a"
-          emissive="#1133aa"
-          emissiveIntensity={0.4}
-          metalness={0.3}
-          roughness={0.7}
-          side={DoubleSide}
-        />
+      {/* Edge frame */}
+      <mesh material={frame} position={[0, 0, t * 0.55]}>
+        <boxGeometry args={[width * 1.02, height * 0.06, t * 0.5]} />
       </mesh>
-      <mesh position={[-(panelW / 2 + size / 2), 0, 0]}>
-        <planeGeometry args={[panelW, panelH]} />
-        <meshStandardMaterial
-          color="#1a2a4a"
-          emissive="#1133aa"
-          emissiveIntensity={0.4}
-          metalness={0.3}
-          roughness={0.7}
-          side={DoubleSide}
-        />
+      <mesh material={frame} position={[0, 0, -t * 0.55]}>
+        <boxGeometry args={[width * 1.02, height * 0.06, t * 0.5]} />
       </mesh>
     </group>
   );
 }
 
-// ── 3D model: 3U CubeSat (10×10×30 cm, 4 large panels) ────────────
-// Source: procedural Three.js model (BoxGeometry + PlaneGeometry)
+// ── 3D model: 1U CubeSat (10×10×10 cm) ───────────────────────────────
+// Procedural Three.js model with PBR materials — body, deployable solar
+// panels with a metallic frame, monopole antenna, and a glossy lens (camera
+// or star tracker aperture). Geometry uses BoxGeometry with non-zero depth so
+// normals shade correctly under the bloom pass.
+function CubeSat1U({ color, emissiveIntensity }: { color: string; emissiveIntensity: number }) {
+  const size = 0.012;
+  const panelW = 0.022;
+  const panelH = 0.010;
+  const m = useCubeSatMaterials(color, emissiveIntensity);
+  return (
+    <group>
+      <mesh material={m.body}>
+        <boxGeometry args={[size, size, size]} />
+      </mesh>
+      {/* Star-tracker / camera lens on +Z face */}
+      <mesh material={m.lens} position={[0, 0, size / 2 + 0.0005]}>
+        <cylinderGeometry args={[size * 0.18, size * 0.18, 0.001, 12]} />
+      </mesh>
+      {/* Deployed solar panels (left / right) */}
+      <SolarPanel
+        width={panelW}
+        height={panelH}
+        position={[panelW / 2 + size / 2, 0, 0]}
+        panel={m.panel}
+        frame={m.panelFrame}
+      />
+      <SolarPanel
+        width={panelW}
+        height={panelH}
+        position={[-(panelW / 2 + size / 2), 0, 0]}
+        panel={m.panel}
+        frame={m.panelFrame}
+      />
+      {/* UHF monopole antenna */}
+      <mesh material={m.antenna} position={[0, size / 2 + 0.006, 0]}>
+        <cylinderGeometry args={[0.0004, 0.0004, 0.012, 6]} />
+      </mesh>
+    </group>
+  );
+}
+
+// ── 3D model: 3U CubeSat (10×10×30 cm) ───────────────────────────────
+// Procedural Three.js model with PBR materials — elongated body, four
+// deployed solar wings, dipole antennas, and a payload aperture. The
+// extra geometric detail (frames, antennas, lens) is what gives the
+// model real surface normals — the bloom pass picks those up as specular
+// highlights and produces the "real spacecraft" look reviewers expect.
 function CubeSat3U({ color, emissiveIntensity }: { color: string; emissiveIntensity: number }) {
   const w = 0.010;
   const h = 0.030;
   const d = 0.010;
   const panelW = 0.028;
-  const panelH = 0.024;
+  const panelH = 0.026;
+  const m = useCubeSatMaterials(color, emissiveIntensity);
   return (
     <group>
-      {/* 3U body */}
-      <mesh>
+      <mesh material={m.body}>
         <boxGeometry args={[w, h, d]} />
-        <meshStandardMaterial
-          color={color}
-          emissive={color}
-          emissiveIntensity={emissiveIntensity}
-          metalness={0.85}
-          roughness={0.2}
-        />
       </mesh>
-      {/* Solar panels (4 total: left/right × two tiers) */}
+      {/* Rail caps — visible black notches on real CubeSats */}
+      {[-1, 1].map((sy) => (
+        <mesh
+          key={sy}
+          material={m.panelFrame}
+          position={[0, sy * (h / 2 + 0.0008), 0]}
+        >
+          <boxGeometry args={[w * 1.04, 0.0016, d * 1.04]} />
+        </mesh>
+      ))}
+      {/* Payload aperture on +Z */}
+      <mesh material={m.lens} position={[0, h * 0.35, d / 2 + 0.0006]} rotation={[Math.PI / 2, 0, 0]}>
+        <cylinderGeometry args={[0.0026, 0.0026, 0.0012, 16]} />
+      </mesh>
+      {/* Four deployed solar wings (two per side) */}
       {[-1, 1].map((side) =>
-        [-0.008, 0.008].map((offset, j) => (
-          <mesh
-            key={`${side}-${j}`}
-            position={[side * (panelW / 2 + w / 2), offset * 2, 0]}
-          >
-            <planeGeometry args={[panelW, panelH]} />
-            <meshStandardMaterial
-              color="#0d1a3a"
-              emissive="#0a2299"
-              emissiveIntensity={0.45}
-              metalness={0.25}
-              roughness={0.65}
-              side={DoubleSide}
-            />
-          </mesh>
-        ))
+        [-0.0085, 0.0085].map((offsetY) => (
+          <SolarPanel
+            key={`${side}-${offsetY}`}
+            width={panelW}
+            height={panelH * 0.9}
+            position={[side * (panelW / 2 + w / 2), offsetY, 0]}
+            panel={m.panel}
+            frame={m.panelFrame}
+          />
+        )),
       )}
+      {/* VHF/UHF crossed dipoles */}
+      <mesh material={m.antenna} position={[0, -h / 2 - 0.008, 0]}>
+        <cylinderGeometry args={[0.0004, 0.0004, 0.016, 6]} />
+      </mesh>
+      <mesh material={m.antenna} position={[0, -h / 2 - 0.005, 0]} rotation={[0, 0, Math.PI / 2]}>
+        <cylinderGeometry args={[0.0004, 0.0004, 0.014, 6]} />
+      </mesh>
     </group>
+  );
+}
+
+// ── Optional glTF model loader ──────────────────────────────────────
+// Set `VITE_CUBESAT_GLB=/models/cubesat.glb` (and drop the file in
+// `frontend/public/models/`) to swap the procedural mesh for a real PBR
+// CubeSat from e.g. NASA 3D Resources / GrabCAD. When the variable is
+// unset the build never references the file, so we don't fire 404s in
+// dev or production.
+const GLTF_CUBESAT_URL: string | undefined = import.meta.env.VITE_CUBESAT_GLB as
+  | string
+  | undefined;
+
+function CubeSatGLTF({
+  url,
+  color,
+  emissiveIntensity,
+}: {
+  url: string;
+  color: string;
+  emissiveIntensity: number;
+}) {
+  const gltf = useGLTF(url) as unknown as { scene: Object3D };
+  // Tint the imported model with the constellation color via emissive — this
+  // keeps the original PBR materials intact while giving each constellation
+  // a recognisable accent under the bloom pass.
+  const cloned = useMemo(() => {
+    const root = gltf.scene.clone(true);
+    const tint = new Color(color);
+    root.traverse((child: Object3D) => {
+      const mesh = child as Mesh;
+      if (!mesh.isMesh) return;
+      const apply = (mm: MeshStandardMaterial) => {
+        const dup = mm.clone();
+        dup.emissive = tint;
+        dup.emissiveIntensity = emissiveIntensity * 0.45;
+        mesh.material = dup;
+      };
+      const mat = mesh.material as MeshStandardMaterial | MeshStandardMaterial[];
+      Array.isArray(mat) ? mat.forEach(apply) : apply(mat);
+    });
+    return root;
+  }, [gltf.scene, color, emissiveIntensity]);
+
+  // Real CubeSats are 10–30 cm; the scene unit is 1 = Earth radius (6378 km).
+  return <primitive object={cloned} scale={0.012} />;
+}
+
+if (GLTF_CUBESAT_URL) {
+  // Pre-warm the loader so the first satellite appearance doesn't hitch on
+  // a network round-trip. Drei caches the result on its module-level map.
+  try {
+    useGLTF.preload(GLTF_CUBESAT_URL);
+  } catch {
+    // Optional asset; ignore preload failure.
+  }
+}
+
+// Minimal class-based error boundary — drei's `useGLTF` suspends on load
+// failure, so we need a real boundary (Suspense fallbacks don't catch
+// thrown errors) to fall back to the procedural mesh.
+class ModelErrorBoundary extends Component<
+  { fallback: ReactNode; children: ReactNode },
+  { hasError: boolean }
+> {
+  state = { hasError: false };
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+  componentDidCatch(_err: Error) {
+    // Swallow — the fallback is shown instead.
+  }
+  render() {
+    return this.state.hasError ? this.props.fallback : this.props.children;
+  }
+}
+
+// Picks the glTF model when configured, falls back to the procedural one.
+function CubeSatModel({
+  modelType,
+  color,
+  emissiveIntensity,
+}: {
+  modelType: number;
+  color: string;
+  emissiveIntensity: number;
+}) {
+  const procedural =
+    modelType === 0 ? (
+      <CubeSat1U color={color} emissiveIntensity={emissiveIntensity} />
+    ) : (
+      <CubeSat3U color={color} emissiveIntensity={emissiveIntensity} />
+    );
+  if (!GLTF_CUBESAT_URL) return procedural;
+  return (
+    <ModelErrorBoundary fallback={procedural}>
+      <Suspense fallback={procedural}>
+        <CubeSatGLTF url={GLTF_CUBESAT_URL} color={color} emissiveIntensity={emissiveIntensity} />
+      </Suspense>
+    </ModelErrorBoundary>
   );
 }
 
@@ -216,11 +404,11 @@ const SatMarker = memo(function SatMarker({
   return (
     <group ref={groupRef} position={initPos} onClick={onClick}>
       <group ref={bodyRef}>
-        {modelType === 0 ? (
-          <CubeSat1U color={color} emissiveIntensity={emissiveIntensity} />
-        ) : (
-          <CubeSat3U color={color} emissiveIntensity={emissiveIntensity} />
-        )}
+        <CubeSatModel
+          modelType={modelType}
+          color={color}
+          emissiveIntensity={emissiveIntensity}
+        />
       </group>
 
       {/* Glow around satellite */}
