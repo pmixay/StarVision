@@ -8,13 +8,12 @@ satellite at runtime to verify the filter still bites.
 """
 
 import pytest
-from httpx import AsyncClient, ASGITransport
+from httpx import ASGITransport, AsyncClient
 
 import main
 import orbital
 import satellites
 from satellites import RUSSIAN_CUBESATS, SatelliteInfo
-
 
 SYNTHETIC_NORAD = 99001
 SYNTHETIC_TLE_LINE1 = "1 99001U 23091XX  26091.50000000  .00000280  00000-0  18000-4 0  9994"
@@ -139,9 +138,17 @@ async def test_tle_meta_shape(client):
     resp = await client.get("/api/tle?source=embedded")
     data = resp.json()
     meta = data["meta"]
-    for key in ("requested_source", "effective_source", "operational_only",
-                "fetched_at", "cache_age_sec", "network_error",
-                "fallback_count", "live_count", "total"):
+    for key in (
+        "requested_source",
+        "effective_source",
+        "operational_only",
+        "fetched_at",
+        "cache_age_sec",
+        "network_error",
+        "fallback_count",
+        "live_count",
+        "total",
+    ):
         assert key in meta, f"meta missing {key}"
     assert meta["requested_source"] == "embedded"
     assert meta["network_error"] is False

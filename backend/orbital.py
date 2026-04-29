@@ -3,16 +3,16 @@ orbital.py — Orbital mechanics: SGP4 propagation, position calculation.
 """
 
 import math
-from datetime import datetime, timezone, timedelta
-from typing import List, Dict, Any, Tuple
+from datetime import datetime, timedelta, timezone
+from typing import Any
 
-from sgp4.api import Satrec, WGS72, jday
+from sgp4.api import WGS72, Satrec, jday
 
 from satellites import RUSSIAN_CUBESATS, SatelliteInfo, is_operational
 
 # ── Constants ──────────────────────────────────────────────────────
 EARTH_RADIUS_KM = 6371.0
-MU = 398600.4418            # km³/s² — Earth gravitational parameter
+MU = 398600.4418  # km³/s² — Earth gravitational parameter
 DEG2RAD = math.pi / 180.0
 RAD2DEG = 180.0 / math.pi
 
@@ -23,7 +23,7 @@ RAD2DEG = 180.0 / math.pi
 # brings new orbital elements). The dict is bounded by the number of distinct
 # TLE pairs the process sees during a session, which is small (catalog size +
 # CelesTrak refresh count).
-_SATREC_CACHE: Dict[Tuple[str, str], Satrec] = {}
+_SATREC_CACHE: dict[tuple[str, str], Satrec] = {}
 
 
 def _walker_layout(total: int, planes: int) -> tuple[int, int, int, int]:
@@ -56,14 +56,24 @@ def _walker_slot(index: int, total: int, planes: int) -> tuple[int, int, int, in
     return effective_planes, phase_factor, plane_idx, sat_in_plane, sats_in_plane
 
 
-def _virtual_eci(index: int, total: int, altitude_km: float, sim_time_sec: float,
-                 planes: int = 1, inclination_deg: float = 55.0) -> tuple[float, float, float]:
+def _virtual_eci(
+    index: int,
+    total: int,
+    altitude_km: float,
+    sim_time_sec: float,
+    planes: int = 1,
+    inclination_deg: float = 55.0,
+) -> tuple[float, float, float]:
     """Shared Walker-δ virtual-orbit generator, mirrored with frontend/src/lib/orbital.ts."""
     a = EARTH_RADIUS_KM + altitude_km
     n = math.sqrt(MU / (a * a * a))
-    effective_planes, phase_factor, plane_idx, sat_in_plane, sats_in_plane = _walker_slot(index, total, planes)
+    effective_planes, phase_factor, plane_idx, sat_in_plane, sats_in_plane = _walker_slot(
+        index, total, planes
+    )
     raan = (plane_idx / effective_planes) * 2 * math.pi
-    phase = (sat_in_plane / sats_in_plane) * 2 * math.pi + ((phase_factor * plane_idx) / effective_planes) * ((2 * math.pi) / sats_in_plane)
+    phase = (sat_in_plane / sats_in_plane) * 2 * math.pi + (
+        (phase_factor * plane_idx) / effective_planes
+    ) * ((2 * math.pi) / sats_in_plane)
     mean_anomaly = n * sim_time_sec + phase
 
     x_orb = a * math.cos(mean_anomaly)
@@ -83,7 +93,7 @@ def _virtual_eci(index: int, total: int, altitude_km: float, sim_time_sec: float
 
 def _resolve_tle(
     sat: SatelliteInfo,
-    tle_override: Dict[int, tuple] = None,
+    tle_override: dict[int, tuple] = None,
 ) -> tuple:
     """Return (tle_line1, tle_line2) — from override or built-in."""
     if tle_override and sat.norad_id in tle_override:
@@ -123,23 +133,22 @@ def tle_to_satrec(tle1: str, tle2: str) -> Satrec:
     return cached
 
 
-def propagate_satellite(sat_info: SatelliteInfo, dt: datetime) -> Dict[str, Any]:
+def propagate_satellite(sat_info: SatelliteInfo, dt: datetime) -> dict[str, Any]:
     """
     Propagate satellite to time dt.
     Returns ECI coordinates (km), velocity (km/s) and orbital elements.
     """
     satrec = tle_to_satrec(sat_info.tle_line1, sat_info.tle_line2)
 
-    jd, fr = jday(dt.year, dt.month, dt.day,
-                  dt.hour, dt.minute, dt.second + dt.microsecond / 1e6)
+    jd, fr = jday(dt.year, dt.month, dt.day, dt.hour, dt.minute, dt.second + dt.microsecond / 1e6)
 
     error, position, velocity = satrec.sgp4(jd, fr)
 
     if error != 0:
         return {"error": f"SGP4 error code {error}"}
 
-    x, y, z = position       # km (ECI)
-    vx, vy, vz = velocity    # km/s
+    x, y, z = position  # km (ECI)
+    vx, vy, vz = velocity  # km/s
 
     # Altitude above surface
     r = math.sqrt(x**2 + y**2 + z**2)
@@ -169,15 +178,19 @@ def propagate_satellite(sat_info: SatelliteInfo, dt: datetime) -> Dict[str, Any]
     }
 
 
-def eci_to_geodetic(x: float, y: float, z: float, jd_total: float) -> Tuple[float, float]:
+def eci_to_geodetic(x: float, y: float, z: float, jd_total: float) -> tuple[float, float]:
     """Convert ECI → geodetic coordinates (lat, lon in degrees)."""
     r = math.sqrt(x**2 + y**2 + z**2)
     lat = math.asin(z / r) * RAD2DEG
 
     # Greenwich Mean Sidereal Time (GMST) for longitude conversion
     t = (jd_total - 2451545.0) / 36525.0
-    gmst = 280.46061837 + 360.98564736629 * (jd_total - 2451545.0) + \
-           0.000387933 * t**2 - t**3 / 38710000.0
+    gmst = (
+        280.46061837
+        + 360.98564736629 * (jd_total - 2451545.0)
+        + 0.000387933 * t**2
+        - t**3 / 38710000.0
+    )
     gmst = gmst % 360.0
 
     lon_eci = math.atan2(y, x) * RAD2DEG
@@ -188,8 +201,8 @@ def eci_to_geodetic(x: float, y: float, z: float, jd_total: float) -> Tuple[floa
 
 def propagate_all(
     dt: datetime = None,
-    tle_override: Dict[int, tuple] = None,
-) -> List[Dict[str, Any]]:
+    tle_override: dict[int, tuple] = None,
+) -> list[dict[str, Any]]:
     """Propagate all satellites to time dt (or current UTC).
 
     Args:
@@ -217,9 +230,13 @@ def propagate_all(
     return results
 
 
-def propagate_orbit_path(sat_info: SatelliteInfo, dt_start: datetime,
-                         steps: int = 120, step_sec: float = 60.0,
-                         tle_override: Dict[int, tuple] = None) -> List[Dict[str, float]]:
+def propagate_orbit_path(
+    sat_info: SatelliteInfo,
+    dt_start: datetime,
+    steps: int = 120,
+    step_sec: float = 60.0,
+    tle_override: dict[int, tuple] = None,
+) -> list[dict[str, float]]:
     """
     Calculate orbit points for track visualization.
     Default: 120 points at 60s step = 2 hours of track.
@@ -233,8 +250,9 @@ def propagate_orbit_path(sat_info: SatelliteInfo, dt_start: datetime,
         t = dt_start.timestamp() + offset
         dt = datetime.fromtimestamp(t, tz=timezone.utc)
 
-        jd, fr = jday(dt.year, dt.month, dt.day,
-                      dt.hour, dt.minute, dt.second + dt.microsecond / 1e6)
+        jd, fr = jday(
+            dt.year, dt.month, dt.day, dt.hour, dt.minute, dt.second + dt.microsecond / 1e6
+        )
         error, position, _ = satrec.sgp4(jd, fr)
 
         if error == 0:
@@ -248,8 +266,8 @@ def predict_collisions(
     threshold_km: float = 100.0,
     hours_ahead: float = 24.0,
     step_sec: float = 60.0,
-    tle_override: Dict[int, tuple] = None,
-) -> List[Dict[str, Any]]:
+    tle_override: dict[int, tuple] = None,
+) -> list[dict[str, Any]]:
     """
     Predict potential collisions (close approaches).
     Checks all satellite pairs for minimum distance within the given time window.
@@ -265,15 +283,16 @@ def predict_collisions(
             sats_with_tle.append(_with_tle(s, t1, t2))
     satrecs = [(s, tle_to_satrec(s.tle_line1, s.tle_line2)) for s in sats_with_tle]
 
-    close_approaches: List[Dict[str, Any]] = []
+    close_approaches: list[dict[str, Any]] = []
     # Find minimum distance for each pair over the period
-    pair_min: Dict[tuple, Dict[str, Any]] = {}
+    pair_min: dict[tuple, dict[str, Any]] = {}
 
-    for step_i in range(0, steps, max(1, steps // 1440)):  # ~1440 samples for fine-grained detection
+    for step_i in range(
+        0, steps, max(1, steps // 1440)
+    ):  # ~1440 samples for fine-grained detection
         offset = step_i * step_sec
         dt = dt_start + timedelta(seconds=offset)
-        jd, fr = jday(dt.year, dt.month, dt.day,
-                      dt.hour, dt.minute, dt.second)
+        jd, fr = jday(dt.year, dt.month, dt.day, dt.hour, dt.minute, dt.second)
 
         positions = []
         for sat, satrec in satrecs:
@@ -288,7 +307,7 @@ def predict_collisions(
                 dx = p1[0] - p2[0]
                 dy = p1[1] - p2[1]
                 dz = p1[2] - p2[2]
-                dist = math.sqrt(dx*dx + dy*dy + dz*dz)
+                dist = math.sqrt(dx * dx + dy * dy + dz * dz)
 
                 pair_key = (s1.norad_id, s2.norad_id)
                 if pair_key not in pair_min or dist < pair_min[pair_key]["min_distance_km"]:
@@ -299,7 +318,11 @@ def predict_collisions(
                         "name_2": s2.name,
                         "min_distance_km": round(dist, 2),
                         "time_of_closest_approach": dt.isoformat(),
-                        "risk_level": "critical" if dist < 10 else "warning" if dist < threshold_km else "safe",
+                        "risk_level": (
+                            "critical"
+                            if dist < 10
+                            else "warning" if dist < threshold_km else "safe"
+                        ),
                     }
 
     for pair_data in pair_min.values():
@@ -318,17 +341,22 @@ def predict_virtual_collisions(
     threshold_km: float = 100.0,
     hours_ahead: float = 24.0,
     step_sec: float = 60.0,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """Predict close approaches for the current virtual Walker constellation."""
     dt_start = datetime.now(timezone.utc)
     steps = max(1, int(hours_ahead * 3600 / step_sec))
-    pair_min: Dict[tuple, Dict[str, Any]] = {}
+    pair_min: dict[tuple, dict[str, Any]] = {}
 
     for step_i in range(steps + 1):
         sim_time_sec = step_i * step_sec
         dt = dt_start + timedelta(seconds=sim_time_sec)
         positions = [
-            (idx, _virtual_eci(idx, num_satellites, altitude_km, sim_time_sec, num_planes, inclination_deg))
+            (
+                idx,
+                _virtual_eci(
+                    idx, num_satellites, altitude_km, sim_time_sec, num_planes, inclination_deg
+                ),
+            )
             for idx in range(num_satellites)
         ]
         for i in range(len(positions)):
@@ -348,7 +376,11 @@ def predict_virtual_collisions(
                         "name_2": f"VirtSat-{idx2 + 1}",
                         "min_distance_km": round(dist, 2),
                         "time_of_closest_approach": dt.isoformat(),
-                        "risk_level": "critical" if dist < 10 else "warning" if dist < threshold_km else "safe",
+                        "risk_level": (
+                            "critical"
+                            if dist < 10
+                            else "warning" if dist < threshold_km else "safe"
+                        ),
                     }
 
     results = [item for item in pair_min.values() if item["min_distance_km"] <= threshold_km]
@@ -361,7 +393,7 @@ def optimize_plane_distribution(
     num_planes: int,
     altitude_km: float = 550.0,
     inclination_deg: float = 55.0,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Calculate optimal satellite distribution across orbital planes (Walker constellation).
     Returns Walker-delta constellation parameters: T/P/F.
@@ -383,17 +415,21 @@ def optimize_plane_distribution(
         for s_idx in range(n_in_plane):
             phase_deg = (s_idx / n_in_plane) * 360.0 + (F * p_idx / P) * (360.0 / n_in_plane)
             phase_deg = phase_deg % 360.0
-            sats_in_plane.append({
-                "index": sat_idx,
-                "mean_anomaly_deg": round(phase_deg, 2),
-            })
+            sats_in_plane.append(
+                {
+                    "index": sat_idx,
+                    "mean_anomaly_deg": round(phase_deg, 2),
+                }
+            )
             sat_idx += 1
-        planes.append({
-            "plane_index": p_idx,
-            "raan_deg": round(raan_deg, 2),
-            "satellites_count": n_in_plane,
-            "satellites": sats_in_plane,
-        })
+        planes.append(
+            {
+                "plane_index": p_idx,
+                "raan_deg": round(raan_deg, 2),
+                "satellites_count": n_in_plane,
+                "satellites": sats_in_plane,
+            }
+        )
 
     return {
         "walker_notation": f"{T}/{P}/{F}",
@@ -407,14 +443,14 @@ def optimize_plane_distribution(
         "velocity_km_s": round(velocity, 3),
         "planes": planes,
         "coverage_note": f"Walker-δ {T}/{P}/{F}: {P} плоскостей RAAN через {round(360/P, 1)}°, "
-                        f"{S} КА/плоскость, межплоскостный сдвиг F={F}",
+        f"{S} КА/плоскость, межплоскостный сдвиг F={F}",
     }
 
 
 def get_orbital_elements(
     sat_info: SatelliteInfo,
-    tle_override: Dict[int, tuple] = None,
-) -> Dict[str, Any]:
+    tle_override: dict[int, tuple] = None,
+) -> dict[str, Any]:
     """Extract Keplerian elements from TLE."""
     tle1, tle2 = _resolve_tle(sat_info, tle_override)
     satrec = tle_to_satrec(tle1, tle2)
@@ -428,7 +464,7 @@ def get_orbital_elements(
 
     # Semi-major axis from mean motion
     n_rad_s = satrec.no_kozai / 60.0  # rad/min → rad/s
-    a_km = (MU / (n_rad_s**2))**(1/3) if n_rad_s > 0 else 0
+    a_km = (MU / (n_rad_s**2)) ** (1 / 3) if n_rad_s > 0 else 0
 
     return {
         "norad_id": sat_info.norad_id,

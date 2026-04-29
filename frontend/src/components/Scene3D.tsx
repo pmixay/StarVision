@@ -1,6 +1,8 @@
 import { Suspense, lazy, useRef, useMemo, useEffect, useCallback, type ElementRef } from 'react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { OrbitControls, Stars, PerspectiveCamera } from '@react-three/drei';
+import { EffectComposer, Bloom, SMAA, Vignette } from '@react-three/postprocessing';
+import { BlendFunction, KernelSize } from 'postprocessing';
 import { Group, Vector3 } from 'three';
 
 type OrbitControlsRef = ElementRef<typeof OrbitControls>;
@@ -331,6 +333,27 @@ function SceneContent({ positions, tleData, orbitPaths, satelliteConstellations 
           satelliteConstellations={satelliteConstellations}
         />
       </Suspense>
+
+      {/* Postprocessing: bloom for atmosphere/satellite glow, SMAA for edges,
+          and a subtle vignette to focus the viewer on the constellation.
+          `multisampling={0}` defers AA entirely to SMAA — cheaper and crisper
+          on R3F than the default browser MSAA on a post-processed scene. */}
+      <EffectComposer multisampling={0}>
+        <Bloom
+          intensity={0.85}
+          luminanceThreshold={0.18}
+          luminanceSmoothing={0.32}
+          mipmapBlur
+          kernelSize={KernelSize.LARGE}
+        />
+        <SMAA />
+        <Vignette
+          eskil={false}
+          offset={0.18}
+          darkness={0.55}
+          blendFunction={BlendFunction.NORMAL}
+        />
+      </EffectComposer>
     </>
   );
 }
@@ -347,7 +370,7 @@ export function Scene3D({ positions, tleData, orbitPaths, satelliteConstellation
   return (
     <div className="absolute inset-0">
       <Canvas
-        gl={{ antialias: true, alpha: false }}
+        gl={{ antialias: false, alpha: false, powerPreference: 'high-performance' }}
         style={{ background: '#050a18' }}
         dpr={[1, 1.5]}
       >

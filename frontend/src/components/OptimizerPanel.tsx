@@ -53,8 +53,9 @@ export function OptimizerPanel() {
       pushToast({ level: 'error', title: t('event.apiError', lang), detail });
       logEvent({ level: 'error', kind: 'api_error', message: 'fetchOptimizePlanes failed', details: detail });
     } finally {
-      if (requestId !== requestSeqRef.current) return;
-      setLoading(false);
+      if (requestId === requestSeqRef.current) {
+        setLoading(false);
+      }
     }
   };
 

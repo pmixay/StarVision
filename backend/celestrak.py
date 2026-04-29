@@ -5,11 +5,11 @@ and fallback to built-in data.
 """
 
 import asyncio
-import time
 import logging
 import re
-from datetime import datetime, timezone, timedelta
-from typing import Dict, List, Optional, Tuple
+import time
+from datetime import datetime, timedelta, timezone
+from typing import Optional
 
 import httpx
 
@@ -20,16 +20,23 @@ from satellites import RUSSIAN_CUBESATS, is_operational
 # rather than crashing on first /api/tle?source=celestrak.
 try:
     import h2  # noqa: F401
+
     _HTTP2_AVAILABLE = True
 except ImportError:
     _HTTP2_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 
-# Primary group endpoints (CelesTrak). When CelesTrak is reachable they
-# cover most CubeSats in one shot.
+# Primary group endpoints (CelesTrak).
+# `active` carries every operational spacecraft (~45k entries, ~1.7 MB) —
+# every Russian university CubeSat we ship with is in it. We previously
+# queried `cubesat` + `amateur`, but those groups miss most Russian
+# CubeSats (e.g. the entire 2024-11-05 Vostochny launch is in `active`
+# only) which is why production saw "2/15 LIVE": the per-NORAD fallback
+# requests then ate the 6 s wall-clock budget before they could fill
+# the gap. `amateur` is kept as a smaller secondary feed for redundancy.
 CELESTRAK_URLS = [
-    "https://celestrak.org/NORAD/elements/gp.php?GROUP=cubesat&FORMAT=tle",
+    "https://celestrak.org/NORAD/elements/gp.php?GROUP=active&FORMAT=tle",
     "https://celestrak.org/NORAD/elements/gp.php?GROUP=amateur&FORMAT=tle",
 ]
 
@@ -52,15 +59,15 @@ CACHE_TTL_SEC = 3600  # refresh every hour
 # before the deadline is still committed to the cache.
 FETCH_WALL_CLOCK_BUDGET_SEC = 6.0
 
-_tle_cache: Dict[int, Tuple[str, str]] = {}
+_tle_cache: dict[int, tuple[str, str]] = {}
 _cache_timestamp: float = 0.0
 # Lock and in-flight future are lazy-initialised so the module can be imported
 # before any event loop exists (asyncio primitives bind to the current loop on
 # construction; that fails under uvicorn's deferred startup).
-_cache_lock: Optional[asyncio.Lock] = None
-_inflight_fetch: Optional["asyncio.Future[Dict[int, Tuple[str, str]]]"] = None
+_cache_lock: asyncio.Lock | None = None
+_inflight_fetch: Optional["asyncio.Future[dict[int, tuple[str, str]]]"] = None
 _last_fetch_ok: bool = False
-_last_fetch_error: Optional[str] = None
+_last_fetch_error: str | None = None
 _last_fetch_attempt: float = 0.0
 
 
@@ -97,7 +104,7 @@ def _classify_network_error(exc: BaseException) -> str:
     return ERR_UPSTREAM
 
 
-def get_cache_status() -> Dict[str, object]:
+def get_cache_status() -> dict[str, object]:
     """Public snapshot of CelesTrak cache state. Used by API clients
     to display data freshness and surface network/parse failures instead
     of silently serving embedded data.
@@ -106,8 +113,10 @@ def get_cache_status() -> Dict[str, object]:
     exception details are not exposed.
     """
     now = time.time()
-    age_sec: Optional[float] = (now - _cache_timestamp) if _cache_timestamp > 0 else None
-    last_attempt_age: Optional[float] = (now - _last_fetch_attempt) if _last_fetch_attempt > 0 else None
+    age_sec: float | None = (now - _cache_timestamp) if _cache_timestamp > 0 else None
+    last_attempt_age: float | None = (
+        (now - _last_fetch_attempt) if _last_fetch_attempt > 0 else None
+    )
     stale = age_sec is not None and age_sec > CACHE_TTL_SEC
     return {
         "entries": len(_tle_cache),
@@ -119,9 +128,10 @@ def get_cache_status() -> Dict[str, object]:
         "last_fetch_age_sec": round(last_attempt_age, 1) if last_attempt_age is not None else None,
     }
 
+
 # TLE line regex: basic format validation
-_TLE_LINE1_RE = re.compile(r'^1 \d{5}[A-Z ]')
-_TLE_LINE2_RE = re.compile(r'^2 \d{5} ')
+_TLE_LINE1_RE = re.compile(r"^1 \d{5}[A-Z ]")
+_TLE_LINE2_RE = re.compile(r"^2 \d{5} ")
 
 
 def _tle_checksum(line: str) -> int:
@@ -130,7 +140,7 @@ def _tle_checksum(line: str) -> int:
     for ch in line[:68]:
         if ch.isdigit():
             total += int(ch)
-        elif ch == '-':
+        elif ch == "-":
             total += 1
     return total % 10
 
@@ -174,11 +184,11 @@ def _is_tle_valid(line1: str, line2: str, max_age_days: float = 365.0) -> bool:
     return True
 
 
-def _parse_tle_text(text: str) -> Dict[int, Tuple[str, str]]:
+def _parse_tle_text(text: str) -> dict[int, tuple[str, str]]:
     """Parse TLE-format text (3 lines per satellite: name, line1, line2).
     Validates each set — skips corrupted entries."""
     lines = [line.strip() for line in text.strip().splitlines() if line.strip()]
-    result: Dict[int, Tuple[str, str]] = {}
+    result: dict[int, tuple[str, str]] = {}
 
     i = 0
     while i < len(lines) - 2:
@@ -205,7 +215,7 @@ def _parse_tle_text(text: str) -> Dict[int, Tuple[str, str]]:
     return result
 
 
-async def fetch_celestrak_tle(norad_ids: Optional[List[int]] = None) -> Dict[int, Tuple[str, str]]:
+async def fetch_celestrak_tle(norad_ids: list[int] | None = None) -> dict[int, tuple[str, str]]:
     """Fetch TLE from CelesTrak for the given NORAD IDs (catalog by default).
 
     Concurrency model:
@@ -261,41 +271,45 @@ async def fetch_celestrak_tle(norad_ids: Optional[List[int]] = None) -> Dict[int
 
 
 async def _run_celestrak_fetch(
-    norad_ids: List[int],
-    future: "asyncio.Future[Dict[int, Tuple[str, str]]]",
+    norad_ids: list[int],
+    future: "asyncio.Future[dict[int, tuple[str, str]]]",
 ) -> None:
     """Worker that performs the actual CelesTrak round-trip.
     Always settles `future` (so awaiters wake up) and resets `_inflight_fetch`."""
     global _tle_cache, _cache_timestamp, _last_fetch_ok, _last_fetch_error, _last_fetch_attempt
     global _inflight_fetch
 
-    all_tle: Dict[int, Tuple[str, str]] = {}
+    all_tle: dict[int, tuple[str, str]] = {}
     target_set = set(norad_ids)
-    network_error: Optional[str] = None
+    network_error: str | None = None
     _last_fetch_attempt = time.time()
     # Per-task outcome counters so we can emit a single summary line
     # instead of N tracebacks when CelesTrak is blocked.
-    outcomes: Dict[str, int] = {"ok": 0, "empty": 0, "network": 0, "http": 0, "other": 0}
+    outcomes: dict[str, int] = {"ok": 0, "empty": 0, "network": 0, "http": 0, "other": 0}
 
     try:
         try:
-            # Single-pass parallel fetch: kick off group files AND a
-            # per-NORAD lookup for every requested satellite at the same
-            # time. Group results usually arrive first and populate most
-            # entries; per-NORAD fetches fill in anything the groups miss
-            # (Russian CubeSats often aren't in the "cubesat"/"amateur"
-            # CelesTrak groups, so the old "groups first, then individuals"
-            # pipeline doubled latency — every cold load paid both phases).
-            # Per-request timeout is bounded so a single slow CelesTrak
-            # response cannot hold the cache lock for tens of seconds.
+            # Two-phase parallel fetch:
+            #   1. Group endpoints (`active` is exhaustive for current
+            #      Russian CubeSats; `amateur` and the AMSAT mirror are
+            #      kept as cheap secondary feeds for redundancy).
+            #   2. Per-NORAD CATNR fallback ONLY for IDs that were still
+            #      missing after phase 1 — usually empty.
+            # Phase 1 alone covers our entire active catalog, so the
+            # 2024 "groups first, then 17 individuals" plan was wasted
+            # work that ate the wall-clock budget. Per-request timeout
+            # is bounded so a single slow CelesTrak response cannot
+            # hold the cache lock for tens of seconds.
             # connect=3s: when CelesTrak is blocked at the network edge
             # (common from RU networks), every connection attempt times
             # out; a 3 s budget makes the whole "tried, failed, falling
             # back to embedded" loop feel snappy instead of frozen.
-            timeout = httpx.Timeout(connect=3.0, read=10.0, write=5.0, pool=5.0)
-            limits = httpx.Limits(max_connections=32, max_keepalive_connections=16)
+            timeout = httpx.Timeout(connect=3.0, read=12.0, write=5.0, pool=5.0)
+            limits = httpx.Limits(max_connections=8, max_keepalive_connections=4)
             async with httpx.AsyncClient(
-                timeout=timeout, http2=_HTTP2_AVAILABLE, limits=limits,
+                timeout=timeout,
+                http2=_HTTP2_AVAILABLE,
+                limits=limits,
                 follow_redirects=True,
             ) as client:
                 # Wrap as Tasks so we can harvest finished work after a
@@ -304,21 +318,24 @@ async def _run_celestrak_fetch(
                 tasks: list[asyncio.Task] = []
                 for url in CELESTRAK_URLS:
                     tasks.append(asyncio.create_task(_fetch_url(client, url)))
-                for nid in norad_ids:
-                    tasks.append(asyncio.create_task(_fetch_url(
-                        client,
-                        f"https://celestrak.org/NORAD/elements/gp.php?CATNR={nid}&FORMAT=tle",
-                    )))
                 for url in MIRROR_URLS:
                     tasks.append(asyncio.create_task(_fetch_url(client, url)))
+                # Per-NORAD fallback ONLY for the entries the group files
+                # didn't return. Computed after the group fetches finish
+                # so we don't waste a request on every satellite when
+                # `active` already covers the whole catalog.
                 logger.info(
                     "TLE fetch: %d total requests in parallel (CelesTrak + mirrors)",
                     len(tasks),
                 )
-                # Hard wall-clock cap on the entire fetch — see
-                # FETCH_WALL_CLOCK_BUDGET_SEC for rationale.
+                fetch_started = time.monotonic()
+                # Phase 1 takes the larger slice so the cheap group
+                # feeds get a chance to land before we even consider
+                # per-NORAD fallback.
+                phase1_budget = FETCH_WALL_CLOCK_BUDGET_SEC * 0.7
                 done, pending = await asyncio.wait(
-                    tasks, timeout=FETCH_WALL_CLOCK_BUDGET_SEC,
+                    tasks,
+                    timeout=phase1_budget,
                 )
                 cancelled = len(pending)
                 if pending:
@@ -332,6 +349,40 @@ async def _run_celestrak_fetch(
                         for nid, tle in parsed.items():
                             if nid in target_set:
                                 all_tle[nid] = tle
+                # Phase 2: cover any catalog entries the group feeds
+                # missed (e.g. fresh launches not yet propagated into
+                # CelesTrak's group files) with per-NORAD lookups.
+                # Empty in the typical case — the active group covers
+                # everything we ship.
+                missing = [nid for nid in norad_ids if nid not in all_tle]
+                phase2_budget = max(
+                    0.0,
+                    FETCH_WALL_CLOCK_BUDGET_SEC - (time.monotonic() - fetch_started),
+                )
+                if missing and phase2_budget > 0.5:
+                    phase2_tasks = [
+                        asyncio.create_task(
+                            _fetch_url(
+                                client,
+                                f"https://celestrak.org/NORAD/elements/gp.php?CATNR={nid}&FORMAT=tle",
+                            )
+                        )
+                        for nid in missing
+                    ]
+                    p2_done, p2_pending = await asyncio.wait(
+                        phase2_tasks,
+                        timeout=phase2_budget,
+                    )
+                    for fut in p2_pending:
+                        fut.cancel()
+                    cancelled += len(p2_pending)
+                    for fut in p2_done:
+                        parsed, kind = fut.result()
+                        outcomes[kind] = outcomes.get(kind, 0) + 1
+                        if parsed:
+                            for nid, tle in parsed.items():
+                                if nid in target_set:
+                                    all_tle[nid] = tle
                 # Any non-success outcome whose root cause was network
                 # (timeout / DNS / refused) means we should report
                 # `network_error` to the client even if a partial result
@@ -346,8 +397,12 @@ async def _run_celestrak_fetch(
                     level,
                     "TLE fetch summary: %d ok, %d empty, %d network-error, "
                     "%d http-error, %d other-error, %d cancelled (budget %.1fs)",
-                    outcomes["ok"], outcomes["empty"], outcomes["network"],
-                    outcomes["http"], outcomes["other"], cancelled,
+                    outcomes["ok"],
+                    outcomes["empty"],
+                    outcomes["network"],
+                    outcomes["http"],
+                    outcomes["other"],
+                    cancelled,
                     FETCH_WALL_CLOCK_BUDGET_SEC,
                 )
         except Exception:
@@ -365,7 +420,8 @@ async def _run_celestrak_fetch(
             _last_fetch_error = None
             logger.info(
                 "TLE cache updated: %d/%d satellites fetched from CelesTrak",
-                len(all_tle), len(norad_ids),
+                len(all_tle),
+                len(norad_ids),
             )
             future.set_result({nid: _tle_cache[nid] for nid in norad_ids if nid in _tle_cache})
             return
@@ -384,8 +440,9 @@ async def _run_celestrak_fetch(
 
 
 async def _fetch_url(
-    client: httpx.AsyncClient, url: str,
-) -> Tuple[Dict[int, Tuple[str, str]], str]:
+    client: httpx.AsyncClient,
+    url: str,
+) -> tuple[dict[int, tuple[str, str]], str]:
     """Fetch and parse TLE from a single URL.
 
     Returns `(parsed, outcome)` where `outcome` is one of
@@ -431,7 +488,7 @@ async def _fetch_url(
     return parsed, "ok"
 
 
-async def get_tle_by_source(source: str = "embedded") -> Dict[str, object]:
+async def get_tle_by_source(source: str = "embedded") -> dict[str, object]:
     """Get TLE data for the given source and return it alongside an
     explicit meta block describing where every entry came from.
 
@@ -450,17 +507,18 @@ async def get_tle_by_source(source: str = "embedded") -> Dict[str, object]:
     Callers (API layer) are expected to surface `meta` to the client so
     end-users can see data freshness and any upstream failures.
     """
+
     def _with_meta(
         *,
         requested_source: str,
         effective_source: str,
         fallback: bool,
-        error: Optional[str],
-        tle_data: List[dict],
+        error: str | None,
+        tle_data: list[dict],
         fallback_count: int,
         live_count: int,
         network_error: bool,
-    ) -> Dict[str, object]:
+    ) -> dict[str, object]:
         return {
             "requested_source": requested_source,
             "effective_source": effective_source,
@@ -474,8 +532,6 @@ async def get_tle_by_source(source: str = "embedded") -> Dict[str, object]:
             "total": len(tle_data),
             **get_cache_status(),
         }
-
-    cache_status = get_cache_status()
 
     if source == "celestrak":
         try:
@@ -501,7 +557,7 @@ async def get_tle_by_source(source: str = "embedded") -> Dict[str, object]:
                 ),
             }
 
-        result: List[dict] = []
+        result: list[dict] = []
         any_fallback = False
         fallback_count = 0
         live_count = 0
@@ -520,14 +576,16 @@ async def get_tle_by_source(source: str = "embedded") -> Dict[str, object]:
                 entry_source = "embedded_fallback"
                 any_fallback = True
                 fallback_count += 1
-            result.append({
-                "norad_id": s.norad_id,
-                "name": s.name,
-                "constellation": s.constellation,
-                "tle_line1": line1,
-                "tle_line2": line2,
-                "source": entry_source,
-            })
+            result.append(
+                {
+                    "norad_id": s.norad_id,
+                    "name": s.name,
+                    "constellation": s.constellation,
+                    "tle_line1": line1,
+                    "tle_line2": line2,
+                    "source": entry_source,
+                }
+            )
 
         fresh_status = get_cache_status()
         effective = "celestrak"
@@ -542,7 +600,11 @@ async def get_tle_by_source(source: str = "embedded") -> Dict[str, object]:
                 requested_source="celestrak",
                 effective_source=effective,
                 fallback=any_fallback or not result,
-                error=fresh_status.get("last_fetch_error") if not fresh_status.get("last_fetch_ok") else None,
+                error=(
+                    fresh_status.get("last_fetch_error")
+                    if not fresh_status.get("last_fetch_ok")
+                    else None
+                ),
                 tle_data=result,
                 fallback_count=fallback_count,
                 live_count=live_count,
@@ -567,7 +629,7 @@ async def get_tle_by_source(source: str = "embedded") -> Dict[str, object]:
     }
 
 
-def _get_embedded_tle_list(tag: str = "embedded") -> List[dict]:
+def _get_embedded_tle_list(tag: str = "embedded") -> list[dict]:
     """Built-in TLE as list of dicts. Archival satellites are excluded."""
     return [
         {

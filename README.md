@@ -2,13 +2,19 @@
 
 # StarVision v1.3 — Цифровой двойник группировки кубсатов
 
+[![CI](https://github.com/molotokmephi/starvision/actions/workflows/ci.yml/badge.svg)](https://github.com/molotokmephi/starvision/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Docker](https://img.shields.io/badge/docker-compose%20up-2496ed?logo=docker&logoColor=white)](docker-compose.yml)
+
 > **Hackathon: Digital Twins of Space Systems** | **Хакатон: Цифровые двойники космических систем**
 >
 > Interactive 3D prototype of a Russian CubeSat constellation digital twin
 >
 > Интерактивный 3D-прототип цифрового двойника группировки CubeSat
 
-**Live Demo / Публичный деплой:** http://78.17.40.155/
+- **Live Demo / Публичный деплой:** http://78.17.40.155/
+- **Source / Исходный код:** https://github.com/molotokmephi/starvision
+- **Issues / Баги и идеи:** https://github.com/molotokmephi/starvision/issues
 
 ---
 
@@ -40,7 +46,7 @@ Walker-режим, визуализацию межспутниковых свя�
 | Open data sources | CelesTrak TLE + embedded fallback with explicit meta | [celestrak.py](backend/celestrak.py), Header/MissionDashboard |
 | Performance | Throttled raycasting, object pool, reduced per-frame work | See "Performance" section |
 | RU / EN interface | Full RU/EN coverage for active UI panels used in demo | [i18n.ts](frontend/src/i18n.ts) |
-| Public repo + README + licence | Unlicense, RU/EN docs | [LICENSE](LICENSE), [docs/](docs/) |
+| Public repo + README + licence | Public GitHub repo + MIT licence + RU/EN docs | [GitHub](https://github.com/molotokmephi/starvision), [LICENSE](LICENSE), [docs/](docs/) |
 | **Bonus: collision prediction** | `GET /api/collisions` with threshold + horizon | [orbital.py `predict_collisions`](backend/orbital.py), [CollisionPanel.tsx](frontend/src/components/CollisionPanel.tsx) |
 | **Bonus: plane optimisation** | Walker-δ optimiser, UI can apply result | [orbital.py `optimize_plane_distribution`](backend/orbital.py), [OptimizerPanel.tsx](frontend/src/components/OptimizerPanel.tsx) |
 | **Bonus: AI in UI** | StarAI whitelisted actions; clamps defend invalid values | [ai_assistant.py](backend/ai_assistant.py), [StarAIChat.tsx](frontend/src/components/StarAIChat.tsx) |
@@ -105,7 +111,7 @@ Walker-режим, визуализацию межспутниковых свя�
 - **Inter-satellite links (ISL)** — per-frame distance calculation with LOS check (Earth shadow)
 - **TLE source: embedded data or CelesTrak** — one-click switching
 - **NASA Blue Marble** Earth texture with Suspense fallback
-- **2 CubeSat 3D models**: 1U (2 solar panels) and 3U (4 panels) — procedural Three.js
+- **2 CubeSat 3D models**: 1U and 3U — procedural Three.js with PBR materials (metallic body, deployable solar panels with metal frames, antennas, lens). Optional drop-in replacement with a real glTF mesh — see [`frontend/public/models/README.md`](frontend/public/models/README.md)
 - **Smooth camera animation** (lerp) with satellite tracking mode
 - **StarAI** — built-in AI assistant (server-side OpenRouter API) with UI control commands
 - **Virtual Walker orbits** — configurable altitude (400–2000 km), 1–7 orbital planes
@@ -202,7 +208,25 @@ See **[ARCHITECTURE.md](ARCHITECTURE.md)** for full architectural documentation 
 
 ## Quick Start / Быстрый старт
 
-### Requirements / Требования
+### Docker (one command) / Docker (одной командой)
+
+The fastest path for jury / hackathon judges — no Python or Node toolchain
+required, just Docker.
+
+Самый быстрый путь для жюри — нужен только Docker, никаких Python и Node.
+
+```bash
+git clone https://github.com/molotokmephi/starvision.git
+cd starvision
+docker compose up --build
+# Frontend → http://localhost:8080
+# Backend  → http://localhost:8000  (also reachable as /api on the frontend)
+```
+
+To enable StarAI add a `backend/.env` file with `OPENROUTER_API_KEY=...`
+before running `docker compose up`. Stop with `docker compose down`.
+
+### Requirements (manual install) / Требования (ручная установка)
 - **Node.js** >= 18.0, **npm** >= 9.0
 - **Python** >= 3.10
 - Modern browser / Современный браузер (Chrome 90+, Firefox 90+, Safari 15+)
@@ -255,6 +279,98 @@ Frontend auto-proxies `/api/*` to `localhost:8000` (configured in `vite.config.t
 
 ---
 
+## Production Deployment over HTTPS / Развёртывание под HTTPS
+
+The recommended production topology is `docker compose` for the app stack
++ a host nginx terminating TLS via Let's Encrypt. This is what the public
+demo at https://starvision.example runs on.
+
+Рекомендуемая боевая схема: `docker compose` для приложения + host-nginx,
+терминирующий TLS через Let's Encrypt.
+
+### 1. Bring up the app stack / Поднимаем стек
+
+```bash
+git clone https://github.com/molotokmephi/starvision.git
+cd starvision
+# Optional: backend/.env with OPENROUTER_API_KEY=...
+docker compose up -d --build
+```
+
+After this `http://127.0.0.1:8080` serves the frontend and proxies
+`/api/*` to the backend container.
+
+### 2. Install nginx + certbot on the host / Ставим nginx и certbot
+
+Ubuntu / Debian:
+
+```bash
+sudo apt update
+sudo apt install -y nginx certbot python3-certbot-nginx
+sudo ufw allow 'Nginx Full'      # opens 80 + 443
+```
+
+### 3. Reverse proxy + TLS / Реверс-прокси + TLS
+
+Replace `starvision.example` with your domain (DNS A-record must already
+point to this server). Replace `you@example.com` with a real email that
+Let's Encrypt can use for renewal notices.
+
+```bash
+sudo tee /etc/nginx/sites-available/starvision >/dev/null <<'NGINX'
+server {
+    listen 80;
+    server_name starvision.example;
+
+    # Forward CelesTrak fetches and the SPA shell to docker-compose.
+    location / {
+        proxy_pass         http://127.0.0.1:8080;
+        proxy_http_version 1.1;
+        proxy_set_header   Host              $host;
+        proxy_set_header   X-Real-IP         $remote_addr;
+        proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Proto $scheme;
+    }
+}
+NGINX
+
+sudo ln -sf /etc/nginx/sites-available/starvision /etc/nginx/sites-enabled/
+sudo nginx -t && sudo systemctl reload nginx
+
+# Issue + auto-install the certificate. Certbot rewrites the server block
+# to listen on 443, redirect 80 → 443, and add the HSTS / TLS settings.
+sudo certbot --nginx -d starvision.example \
+    --redirect --agree-tos --no-eff-email -m you@example.com
+
+# Auto-renew is wired up by the certbot package via systemd timer.
+sudo systemctl status certbot.timer
+```
+
+### 4. Update CORS / Обновляем CORS
+
+The backend rejects unknown origins by default. Add the public HTTPS host:
+
+```bash
+# backend/.env
+CORS_ORIGINS=https://starvision.example
+```
+
+Then `docker compose up -d --build backend` to pick up the new env.
+
+### Notes / Примечания
+
+- Vite dev server itself is HTTP-only — never point Let's Encrypt at
+  `npm run dev`. The HTTPS path is always `host nginx → docker compose`.
+- For a self-signed certificate (intranet / hackathon LAN demo) replace
+  the `certbot` step with `openssl req -x509 -nodes -days 365 -newkey
+  rsa:2048 -keyout starvision.key -out starvision.crt` and reference the
+  files from a manual nginx `ssl_certificate*` block.
+- HSTS is enabled by certbot's `--redirect` flow; double-check
+  `Strict-Transport-Security` is present with `curl -I
+  https://starvision.example`.
+
+---
+
 ## Satellites / Спутники
 
 | Constellation / Группировка | Satellites / Спутники | Purpose / Назначение | Form factor / Форм-фактор |
@@ -272,15 +388,28 @@ Frontend auto-proxies `/api/*` to `localhost:8000` (configured in `vite.config.t
 
 ```
 StarVision/
+├── .github/workflows/ci.yml  # Backend + frontend + docker CI / CI-пайплайн
+├── docker-compose.yml        # One-command stack / Стек одной командой
+├── .pre-commit-config.yaml   # ruff + black + prettier hooks / Хуки линтеров
 ├── backend/
+│   ├── Dockerfile
+│   ├── pyproject.toml        # ruff + black config / Конфиг линтеров
 │   ├── main.py               # FastAPI endpoints / эндпоинты
 │   ├── satellites.py         # 15 Russian CubeSats catalog + TLE / Каталог КА
 │   ├── orbital.py            # SGP4 propagation, ECI → geodetic / пропагация
 │   ├── celestrak.py          # CelesTrak TLE loader + cache / загрузчик TLE
 │   ├── ai_assistant.py       # StarAI — OpenRouter API + offline fallback
-│   ├── requirements.txt
+│   ├── requirements.txt      # Direct deps / Прямые зависимости
+│   ├── requirements.lock     # Pinned + hashed lock file / Lock-файл
 │   └── .env.example
 ├── frontend/
+│   ├── Dockerfile
+│   ├── nginx.conf            # SPA + /api proxy for the prod image / Прокси
+│   ├── .eslintrc.cjs         # ESLint config / Конфиг ESLint
+│   ├── .prettierrc.json      # Prettier config / Конфиг Prettier
+│   ├── public/
+│   │   ├── brand/            # Logo + favicon SVGs / Лого и фавикон
+│   │   └── models/           # Optional glTF drop-in / Опциональный glTF
 │   └── src/
 │       ├── components/
 │       │   ├── Scene3D.tsx            # R3F Canvas, CameraController
@@ -320,6 +449,10 @@ StarVision/
 | Orbital mechanics (server) / Орбит. механика (сервер) | python-sgp4 | MIT |
 | AI assistant / ИИ-ассистент | OpenRouter API (server-side) | — |
 | Bundler / Сборщик | Vite | MIT |
+| Postprocessing / Постпроцессинг | @react-three/postprocessing (Bloom + SMAA + Vignette) | MIT |
+| Container runtime / Контейнеризация | Docker + docker-compose | Apache 2.0 |
+| CI | GitHub Actions (pytest + vitest + tsc + eslint + ruff + black + docker build) | — |
+| Lint / format | ruff, black, eslint, prettier, pre-commit | MIT / Apache 2.0 |
 
 ---
 
@@ -357,9 +490,18 @@ StarVision/
 - License: NASA Media Usage Guidelines — free use with attribution
 
 ### 3D Satellite Models / 3D-модели спутников
-- **Procedural models** in Three.js (BoxGeometry + PlaneGeometry) — **Процедурные модели**
-  - 1U CubeSat: 10×10×10 mm body + 2 solar panels
-  - 3U CubeSat: 10×30×10 mm body + 4 solar panels
+- **Procedural PBR models** in Three.js — metallic body (BoxGeometry, real
+  surface normals), deployable solar panels with metal frames,
+  monopole/dipole antennas, glossy payload lens — все материалы
+  `meshStandardMaterial` с metalness / roughness, чтобы bloom-постпроцесс
+  выдавал реалистичные блики:
+  - 1U CubeSat: 10×10×10 cm + 2 deployed wings + UHF antenna
+  - 3U CubeSat: 10×10×30 cm + 4 deployed wings + crossed dipoles + lens
+- **Optional glTF / OBJ drop-in:** export a real CubeSat mesh from
+  [NASA 3D Resources](https://nasa3d.arc.nasa.gov/models) or
+  [GrabCAD](https://grabcad.com/library?query=cubesat), drop the `.glb`
+  file into `frontend/public/models/`, and set `VITE_CUBESAT_GLB`. See
+  [`frontend/public/models/README.md`](frontend/public/models/README.md).
 
 ---
 
@@ -369,7 +511,7 @@ StarVision/
 - Earth textures used per NASA Media Usage Guidelines
 - 3D satellite models created independently (procedural Three.js)
 - All libraries have open MIT license
-- Project license: **Unlicense** (public domain)
+- Project license: **MIT** — see [LICENSE](LICENSE)
 
 ---
 

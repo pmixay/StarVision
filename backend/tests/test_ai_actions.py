@@ -4,10 +4,10 @@ import pytest
 
 from ai_assistant import (
     OPENROUTER_MODEL,
-    ask_starai,
-    validate_actions,
     _ask_openrouter,
     _get_openrouter_model,
+    ask_starai,
+    validate_actions,
 )
 
 
@@ -44,9 +44,7 @@ def test_rejects_archival_norad(monkeypatch):
     )
     RUSSIAN_CUBESATS.append(archival)
     try:
-        accepted, rejected = validate_actions([
-            {"type": "focus_satellite", "norad_id": 99001}
-        ])
+        accepted, rejected = validate_actions([{"type": "focus_satellite", "norad_id": 99001}])
         assert accepted == []
         assert rejected and "archival" in rejected[0]
     finally:
@@ -82,17 +80,13 @@ def test_clamps_satellite_count():
 
 
 def test_rejects_unknown_constellation():
-    accepted, rejected = validate_actions([
-        {"type": "highlight_constellation", "name": "Starlink"}
-    ])
+    accepted, rejected = validate_actions([{"type": "highlight_constellation", "name": "Starlink"}])
     assert accepted == []
     assert rejected
 
 
 def test_bool_type_enforced_for_toggles():
-    accepted, rejected = validate_actions([
-        {"type": "toggle_links", "visible": "yes"}
-    ])
+    accepted, rejected = validate_actions([{"type": "toggle_links", "visible": "yes"}])
     assert accepted == []
     assert rejected
 

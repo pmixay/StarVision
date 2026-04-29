@@ -9,30 +9,38 @@ import math
 import os
 import time
 from collections import deque
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from threading import Lock
-from typing import AsyncIterator, Deque, Dict, List, Optional
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, Query, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 load_dotenv(Path(__file__).resolve().with_name(".env"))
 
-from satellites import (
-    get_all_satellites, get_satellite_by_id,
-    is_operational,
-)
-from orbital import (
-    propagate_all, propagate_orbit_path,
-    get_orbital_elements, predict_collisions, predict_virtual_collisions, optimize_plane_distribution,
-)
 from ai_assistant import ask_starai
 from celestrak import (
-    get_tle_by_source, invalidate_cache, fetch_celestrak_tle, get_cache_status,
+    fetch_celestrak_tle,
+    get_cache_status,
+    get_tle_by_source,
+    invalidate_cache,
+)
+from orbital import (
+    get_orbital_elements,
+    optimize_plane_distribution,
+    predict_collisions,
+    predict_virtual_collisions,
+    propagate_all,
+    propagate_orbit_path,
+)
+from satellites import (
+    get_all_satellites,
+    get_satellite_by_id,
+    is_operational,
 )
 
 # ── Application ─────────────────────────────────────────────────────
@@ -43,10 +51,9 @@ from celestrak import (
 # (allow_credentials=True below).
 _DEFAULT_CORS_ORIGINS = "http://localhost:3000,http://localhost:5173"
 ALLOWED_ORIGINS = [
-    o.strip()
-    for o in os.getenv("CORS_ORIGINS", _DEFAULT_CORS_ORIGINS).split(",")
-    if o.strip()
+    o.strip() for o in os.getenv("CORS_ORIGINS", _DEFAULT_CORS_ORIGINS).split(",") if o.strip()
 ]
+
 
 @asynccontextmanager
 async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
@@ -55,6 +62,7 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
     ~10 s for the cold round-trip. Failure is logged and ignored — the
     endpoint still works via embedded fallback.
     """
+
     async def _bg():
         try:
             await fetch_celestrak_tle()
@@ -98,12 +106,16 @@ MAX_CHAT_HISTORY_ITEMS = 30
 
 class ChatMessage(BaseModel):
     role: str = Field(..., pattern="^(user|assistant)$")
-    content: str = Field(..., min_length=1, max_length=MAX_CHAT_CONTENT_LEN)
+    # Allow empty content for history items: a previous assistant turn may
+    # have produced no text (provider blip, JSON-only output) but the user
+    # still expects to follow up. Rejecting the whole request with 422
+    # would orphan the conversation.
+    content: str = Field(default="", max_length=MAX_CHAT_CONTENT_LEN)
 
 
 class ChatRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=MAX_CHAT_MESSAGE_LEN)
-    history: List[ChatMessage] = Field(default_factory=list, max_length=MAX_CHAT_HISTORY_ITEMS)
+    history: list[ChatMessage] = Field(default_factory=list, max_length=MAX_CHAT_HISTORY_ITEMS)
     lang: str = Field(default="ru", pattern="^(ru|en)$")
 
 
@@ -114,7 +126,7 @@ class ChatRequest(BaseModel):
 # stdlib to avoid pulling another dep just for one endpoint.
 CHAT_RATE_LIMIT_PER_MIN = int(os.getenv("CHAT_RATE_LIMIT_PER_MIN", "20"))
 CHAT_RATE_WINDOW_SEC = 60.0
-_chat_rate_buckets: Dict[str, Deque[float]] = {}
+_chat_rate_buckets: dict[str, deque[float]] = {}
 _chat_rate_lock = Lock()
 
 
@@ -159,7 +171,7 @@ def _check_chat_rate_limit(req: Request) -> None:
 _TIMESTAMP_MAX_DELTA = timedelta(days=365)
 
 
-def _parse_timestamp(value: Optional[str]) -> Optional[datetime]:
+def _parse_timestamp(value: str | None) -> datetime | None:
     if not value:
         return None
     try:
@@ -223,7 +235,7 @@ async def _get_tle_override(source: str) -> tuple:
 # stable for the lifetime of the process; rebuilding it on every
 # /positions and /links call (60+ times per minute under polling) wastes
 # work for no reason.
-_OPERATIONAL_NORADS_CACHE: Optional[set] = None
+_OPERATIONAL_NORADS_CACHE: set | None = None
 
 
 def _operational_norads() -> set:
@@ -359,7 +371,7 @@ async def health():
 # ── Endpoints: Orbital mechanics ────────────────────────────────────
 @app.get("/api/positions")
 async def get_positions(
-    timestamp: Optional[str] = None,
+    timestamp: str | None = None,
     source: str = Query(default="embedded", pattern="^(embedded|celestrak)$"),
 ):
     """
@@ -400,7 +412,9 @@ async def get_orbit_path(
             detail=f"Satellite {norad_id} is archival ({sat.status}); orbit unavailable",
         )
     tle_override, meta = await _get_tle_override(source)
-    path = propagate_orbit_path(sat, datetime.now(timezone.utc), steps, step_sec, tle_override=tle_override)
+    path = propagate_orbit_path(
+        sat, datetime.now(timezone.utc), steps, step_sec, tle_override=tle_override
+    )
     return {
         "norad_id": norad_id,
         "name": sat.name,
@@ -469,7 +483,7 @@ async def get_elements(
 @app.get("/api/links")
 async def get_links(
     comm_range_km: float = Query(default=2000.0, ge=50.0, le=2000.0),
-    timestamp: Optional[str] = None,
+    timestamp: str | None = None,
     source: str = Query(default="embedded", pattern="^(embedded|celestrak)$"),
 ):
     """
@@ -506,19 +520,23 @@ async def get_links(
             dist = math.sqrt(dx * dx + dy * dy + dz * dz)
             los = has_los(p1, p2)
             connected = dist <= comm_range_km and los
-            links.append({
-                "norad_id_1": p1["norad_id"],
-                "norad_id_2": p2["norad_id"],
-                "name_1": p1["name"],
-                "name_2": p2["name"],
-                "distance_km": round(dist, 2),
-                "los": los,
-                "connected": connected,
-            })
+            links.append(
+                {
+                    "norad_id_1": p1["norad_id"],
+                    "norad_id_2": p2["norad_id"],
+                    "name_1": p1["name"],
+                    "name_2": p2["name"],
+                    "distance_km": round(dist, 2),
+                    "los": los,
+                    "connected": connected,
+                }
+            )
 
     active_count = sum(1 for lnk in links if lnk["connected"])
     blocked_by_earth = sum(1 for lnk in links if not lnk["los"])
-    in_range_no_los = sum(1 for lnk in links if lnk["distance_km"] <= comm_range_km and not lnk["los"])
+    in_range_no_los = sum(
+        1 for lnk in links if lnk["distance_km"] <= comm_range_km and not lnk["los"]
+    )
     return {
         "links": links,
         "active_count": active_count,
@@ -578,12 +596,16 @@ async def get_collisions(
         "hours_ahead": hours_ahead,
         "source": source_label,
         "mode": mode,
-        "params": {
-            "satellite_count": satellite_count,
-            "altitude_km": altitude_km,
-            "planes": effective_planes,
-            "inclination_deg": inclination_deg,
-        } if mode == "virtual" else None,
+        "params": (
+            {
+                "satellite_count": satellite_count,
+                "altitude_km": altitude_km,
+                "planes": effective_planes,
+                "inclination_deg": inclination_deg,
+            }
+            if mode == "virtual"
+            else None
+        ),
         "meta": meta,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
@@ -609,7 +631,14 @@ async def get_optimized_planes(
 async def starai_chat(req: ChatRequest, request: Request):
     """Chat with StarAI — response + UI commands."""
     _check_chat_rate_limit(request)
-    history = [{"role": m.role, "content": m.content} for m in req.history]
+    # Drop blank history turns before forwarding to the model: providers
+    # reject `{"role": "assistant", "content": ""}` with a validation
+    # error, and the empty entries carry no useful conversation signal
+    # anyway (they're typically the leftover of a prior empty-response
+    # bug we've already fixed).
+    history = [
+        {"role": m.role, "content": m.content} for m in req.history if (m.content or "").strip()
+    ]
     result = await ask_starai(
         req.message,
         history,
@@ -625,8 +654,15 @@ async def get_config():
     return {
         "earth_texture_url": "https://eoimages.gsfc.nasa.gov/images/imagerecords/74000/74393/world.200412.3x5400x2700.jpg",
         "earth_radius_km": 6371.0,
-        "scale_factor": 1 / 6371.0,     # normalization: 1 unit = 1 earth radius
-        "constellations": ["УниверСат", "МГТУ Баумана", "SPUTNIX", "Геоскан", "НИИЯФ МГУ", "Space-Pi"],
+        "scale_factor": 1 / 6371.0,  # normalization: 1 unit = 1 earth radius
+        "constellations": [
+            "УниверСат",
+            "МГТУ Баумана",
+            "SPUTNIX",
+            "Геоскан",
+            "НИИЯФ МГУ",
+            "Space-Pi",
+        ],
         "default_time_speed": 1.0,
         "update_interval_ms": 1000,
     }
@@ -635,4 +671,5 @@ async def get_config():
 # ── Entry point ─────────────────────────────────────────────────────
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

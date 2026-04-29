@@ -1,7 +1,7 @@
 """Tests for main.py — FastAPI endpoints."""
 
 import pytest
-from httpx import AsyncClient, ASGITransport
+from httpx import ASGITransport, AsyncClient
 
 from main import app
 
@@ -32,11 +32,12 @@ async def test_list_satellites(client):
     assert resp.status_code == 200
     data = resp.json()
     assert "satellites" in data
-    # Catalog cap is 15 with no archival entries; see test_satellites.py
-    assert data["count"] == 15
-    assert len(data["satellites"]) == 15
+    # 15 active + 3 archival (Yarilo-1 / CubeSX-HSE / Yarilo-3); see
+    # test_satellites.py for the breakdown.
+    assert data["count"] == 18
+    assert len(data["satellites"]) == 18
     assert data["operational_count"] == 15
-    assert data["archive_count"] == 0
+    assert data["archive_count"] == 3
     for sat in data["satellites"]:
         assert "operational" in sat
         assert sat["operational"] == (sat["status"] == "active")

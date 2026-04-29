@@ -3,12 +3,62 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#050a18" />
+    <meta name="description" content="StarVision — interactive 3D digital twin of a Russian CubeSat constellation." />
     <title>StarVision — CubeSat Constellation Digital Twin</title>
+    <link rel="icon" type="image/svg+xml" href="/brand/favicon.svg" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Exo+2:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&family=Nunito+Sans:wght@300;400;600&display=swap" rel="stylesheet" />
+    <style>
+      /* Inline splash so it shows before any JS/CSS bundle loads. */
+      html, body { background: #050a18; margin: 0; height: 100%; overflow: hidden; }
+      #sv-splash {
+        position: fixed; inset: 0; z-index: 9999;
+        display: flex; flex-direction: column; align-items: center; justify-content: center;
+        gap: 18px;
+        background:
+          radial-gradient(circle at 50% 40%, rgba(60,140,255,0.22) 0%, rgba(5,10,24,0) 55%),
+          radial-gradient(circle at 80% 80%, rgba(120,90,255,0.10) 0%, rgba(5,10,24,0) 60%),
+          #050a18;
+        color: #d9ecff; font-family: 'Exo 2', system-ui, sans-serif;
+        transition: opacity 480ms ease;
+      }
+      #sv-splash.hide { opacity: 0; pointer-events: none; }
+      #sv-splash .ring {
+        width: 128px; height: 128px; position: relative;
+        animation: sv-spin 6s linear infinite;
+        filter: drop-shadow(0 0 20px rgba(80, 150, 255, 0.45));
+      }
+      #sv-splash .wordmark {
+        font-weight: 700; font-size: 22px; letter-spacing: 0.32em;
+        background: linear-gradient(90deg, #cfe6ff, #5aa0ff 60%, #cfe6ff);
+        -webkit-background-clip: text; background-clip: text; color: transparent;
+      }
+      #sv-splash .tag {
+        font-family: 'JetBrains Mono', monospace; font-size: 11px;
+        color: rgba(168, 212, 255, 0.7); letter-spacing: 0.12em;
+      }
+      #sv-splash .bar {
+        width: 220px; height: 2px; border-radius: 2px;
+        background: rgba(100, 170, 255, 0.15); overflow: hidden; position: relative;
+      }
+      #sv-splash .bar::after {
+        content: ''; position: absolute; top: 0; left: -40%; height: 100%; width: 40%;
+        background: linear-gradient(90deg, transparent, #5aa0ff, transparent);
+        animation: sv-sweep 1.4s ease-in-out infinite;
+      }
+      @keyframes sv-spin { to { transform: rotate(360deg); } }
+      @keyframes sv-sweep { 0% { left: -40%; } 100% { left: 100%; } }
+    </style>
   </head>
   <body>
+    <div id="sv-splash" aria-hidden="true">
+      <img class="ring" src="/brand/logo.svg" alt="" />
+      <div class="wordmark">STARVISION</div>
+      <div class="tag">CUBESAT&nbsp;CONSTELLATION&nbsp;//&nbsp;DIGITAL&nbsp;TWIN</div>
+      <div class="bar"></div>
+    </div>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

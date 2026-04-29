@@ -134,7 +134,7 @@ def test_parse_ai_response_clean_json():
 
 
 def test_parse_ai_response_in_code_fence():
-    text = "Sure!\n```json\n{\"message\": \"x\", \"actions\": []}\n```\n"
+    text = 'Sure!\n```json\n{"message": "x", "actions": []}\n```\n'
     parsed = _parse_ai_response(text)
     assert parsed == {"message": "x", "actions": []}
 
@@ -160,10 +160,7 @@ def test_parse_ai_response_ignores_non_contract_json():
 
 
 def test_parse_ai_response_skips_nested_diagnostic_objects():
-    text = (
-        '{"error": {"message": "ignored", "actions": []}}\n'
-        '{"message": "real", "actions": []}'
-    )
+    text = '{"error": {"message": "ignored", "actions": []}}\n' '{"message": "real", "actions": []}'
     assert _parse_ai_response(text) == {"message": "real", "actions": []}
 
 

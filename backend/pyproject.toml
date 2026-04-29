@@ -1,0 +1,41 @@
+[tool.black]
+line-length = 100
+target-version = ["py310", "py311", "py312"]
+extend-exclude = '''
+/(
+    venv
+  | \.venv
+  | __pycache__
+  | \.pytest_cache
+)/
+'''
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+extend-exclude = ["venv", ".venv", "__pycache__", ".pytest_cache"]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "B",   # flake8-bugbear
+    "UP",  # pyupgrade
+    "C4",  # flake8-comprehensions
+]
+ignore = [
+    "E501",  # line length is enforced by black
+    "B008",  # FastAPI relies on Depends/Query defaults
+    # UP038 (`isinstance(x, X | Y)`) is deprecated in newer ruff because the
+    # union syntax is measurably slower at runtime than the tuple form.
+    "UP038",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["B011"]
+# main.py loads .env before importing modules that read os.environ at import
+# time — keeping that order is intentional, so suppress the "import not at
+# top of file" warning here.
+"main.py" = ["E402"]

@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none" role="img" aria-label="StarVision">
+  <defs>
+    <radialGradient id="sv-core" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#dceeff"/>
+      <stop offset="55%" stop-color="#5aa0ff"/>
+      <stop offset="100%" stop-color="#1c4eb8"/>
+    </radialGradient>
+    <linearGradient id="sv-ring" x1="0" y1="0" x2="64" y2="64" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#7cc4ff"/>
+      <stop offset="100%" stop-color="#3066d4"/>
+    </linearGradient>
+    <filter id="sv-glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="1.6" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <!-- Outer orbit ring -->
+  <ellipse cx="32" cy="32" rx="26" ry="10" stroke="url(#sv-ring)" stroke-width="1.4"
+           transform="rotate(-22 32 32)" opacity="0.85"/>
+
+  <!-- Inner orbit ring -->
+  <ellipse cx="32" cy="32" rx="22" ry="6" stroke="url(#sv-ring)" stroke-width="1"
+           transform="rotate(28 32 32)" opacity="0.55"/>
+
+  <!-- Core star -->
+  <g filter="url(#sv-glow)">
+    <path fill="url(#sv-core)"
+          d="M32 10 L35 28 L52 32 L35 36 L32 54 L29 36 L12 32 L29 28 Z"/>
+  </g>
+
+  <!-- Satellites on the orbit -->
+  <circle cx="56" cy="20" r="1.8" fill="#9cd2ff"/>
+  <circle cx="9"  cy="44" r="1.4" fill="#9cd2ff" opacity="0.8"/>
+</svg>

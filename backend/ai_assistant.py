@@ -4,14 +4,14 @@ and generates UI control commands.
 """
 
 import json
+import logging
 import os
 import re
-import logging
 from pathlib import Path
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Any
 
-from dotenv import load_dotenv
 import httpx
+from dotenv import load_dotenv
 
 from satellites import RUSSIAN_CUBESATS, is_operational
 
@@ -51,7 +51,7 @@ def _clamp(value: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, value))
 
 
-def _validate_action(action: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+def _validate_action(action: dict[str, Any]) -> tuple[dict[str, Any] | None, str | None]:
     """Return (validated_action, error). The error is a user-visible
     string explaining why an action was dropped — None if accepted.
     """
@@ -124,12 +124,12 @@ def _validate_action(action: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], 
     return None, f"unknown action type '{atype}'"
 
 
-def validate_actions(actions: List[Any]) -> Tuple[List[Dict[str, Any]], List[str]]:
+def validate_actions(actions: list[Any]) -> tuple[list[dict[str, Any]], list[str]]:
     """Validate a list of actions. Returns (accepted, rejected_reasons)."""
     if not isinstance(actions, list):
         return [], ["actions must be a list"]
-    accepted: List[Dict[str, Any]] = []
-    rejected: List[str] = []
+    accepted: list[dict[str, Any]] = []
+    rejected: list[str] = []
     for action in actions[:MAX_ACTIONS_PER_RESPONSE]:
         validated, err = _validate_action(action)
         if validated is not None:
@@ -140,6 +140,7 @@ def validate_actions(actions: List[Any]) -> Tuple[List[Dict[str, Any]], List[str
     if overflow > 0:
         rejected.append(f"dropped {overflow} trailing actions (cap={MAX_ACTIONS_PER_RESPONSE})")
     return accepted, rejected
+
 
 # Anthropic API (via HTTP, no SDK — for simplicity)
 ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
@@ -167,13 +168,14 @@ def _get_openrouter_api_key() -> str:
     return _env("OPENROUTER_API_KEY")
 
 
-def _get_openrouter_model(_model: Optional[str] = None) -> str:
+def _get_openrouter_model(_model: str | None = None) -> str:
     """Return the fixed OpenRouter model.
 
     `_model` is intentionally ignored: StarAI must not be switched to a
     different provider model via client input or environment overrides.
     """
     return OPENROUTER_MODEL
+
 
 SYSTEM_PROMPT_BASE = """You are StarAI, the intelligent assistant of the StarVision project.
 StarVision is a digital twin of a constellation of Russian cubesats and small spacecraft.
@@ -205,13 +207,14 @@ RESPONSE FORMAT — strictly JSON:
   ]
 }}
 
-Russian CubeSats in the system (NORAD ID):
+Russian CubeSats in the system (NORAD ID, 15 operational + 3 archival):
 - UniverSat program: Dekart (46493), NORBI (46494), NORBI-2 (57179), SamSat-Ionosphere (61784)
-- Bauman MSTU: Yarilo-1 (46490), UmKA-1 (57172), Yarilo-3 (57198)
-- SPUTNIX: CubeSX-HSE (47952), CubeSX-HSE-3 (57178)
+- Bauman MSTU: UmKA-1 (57172). Note: Yarilo-1 (46490) decayed 2025-03-07 and Yarilo-3 (57198) is no longer active — both are archival.
+- SPUTNIX: CubeSX-HSE-3 (57178), HyperView 1G (61772). Note: CubeSX-HSE (47952) decayed 2025-06-07 — archival.
 - Geoscan: Vizard-ion (61749)
-- SINP MSU: Monitor-2 (57184)
+- SINP MSU: Monitor-2 (57184), Monitor-3 (57180), Monitor-4 (57182)
 - Space-Pi: TUSUR GO (61782), RTU MIREA-1 (61785), Horizont (61757), ASRTU-1 (61781)
+Never use focus_satellite for archival NORAD IDs (46490, 47952, 57198) — they are de-orbited and the action will be rejected.
 
 {lang_instruction}
 Be friendly, informative, and passionate about space.
@@ -244,7 +247,7 @@ def _is_ai_response_object(obj: Any) -> bool:
     return isinstance(obj.get("message"), str) or isinstance(obj.get("actions"), list)
 
 
-def _scan_first_ai_response_object(text: str) -> Optional[Dict[str, Any]]:
+def _scan_first_ai_response_object(text: str) -> dict[str, Any] | None:
     """Walk the string, asking the JSON decoder to consume an object at
     each '{' until one parses cleanly. Avoids the previous greedy regex
     that could splice two unrelated JSON blobs together. Non-StarAI JSON
@@ -264,7 +267,7 @@ def _scan_first_ai_response_object(text: str) -> Optional[Dict[str, Any]]:
         idx = end
 
 
-def _load_ai_response_object(text: str) -> Optional[Dict[str, Any]]:
+def _load_ai_response_object(text: str) -> dict[str, Any] | None:
     try:
         obj = json.loads(text)
     except json.JSONDecodeError:
@@ -272,18 +275,18 @@ def _load_ai_response_object(text: str) -> Optional[Dict[str, Any]]:
     return obj if _is_ai_response_object(obj) else None
 
 
-def _response_message(parsed: Dict[str, Any], fallback: str) -> str:
+def _response_message(parsed: dict[str, Any], fallback: str) -> str:
     message = parsed.get("message")
     return message if isinstance(message, str) else fallback
 
 
-def _parse_ai_response(text: str) -> Optional[Dict[str, Any]]:
+def _parse_ai_response(text: str) -> dict[str, Any] | None:
     """Best-effort JSON extraction from a model response. Models often
     wrap JSON in ```json … ``` fences or surround it with prose."""
     loaded = _load_ai_response_object(text)
     if loaded is not None:
         return loaded
-    fence_match = re.search(r'```(?:json)?\s*([\s\S]*?)```', text)
+    fence_match = re.search(r"```(?:json)?\s*([\s\S]*?)```", text)
     if fence_match:
         fenced = fence_match.group(1).strip()
         loaded = _load_ai_response_object(fenced)
@@ -297,10 +300,10 @@ def _parse_ai_response(text: str) -> Optional[Dict[str, Any]]:
 
 async def _ask_anthropic(
     user_message: str,
-    history: List[Dict[str, str]],
+    history: list[dict[str, str]],
     lang: str,
     api_key: str,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     messages = list(history) + [{"role": "user", "content": user_message}]
     async with httpx.AsyncClient(timeout=30.0) as client:
         response = await client.post(
@@ -321,9 +324,7 @@ async def _ask_anthropic(
         data = response.json()
 
     text = "".join(
-        block.get("text", "")
-        for block in data.get("content", [])
-        if block.get("type") == "text"
+        block.get("text", "") for block in data.get("content", []) if block.get("type") == "text"
     )
     parsed = _parse_ai_response(text)
     if parsed is None:
@@ -338,16 +339,26 @@ async def _ask_anthropic(
 
 async def _ask_openrouter(
     user_message: str,
-    history: List[Dict[str, str]],
+    history: list[dict[str, str]],
     lang: str,
     api_key: str,
-    model: Optional[str],
-) -> Dict[str, Any]:
+    model: str | None,
+) -> dict[str, Any]:
     """Call OpenRouter (OpenAI-compatible). The system prompt goes as a
     system role message; assistant/user history is forwarded as-is.
+
+    Notes on `openai/gpt-oss-120b`:
+    * It's a reasoning model that consumes max_tokens for its chain of
+      thought. With a small budget it returns ``content=""`` because the
+      tokens were spent inside the reasoning trace. We bump the budget
+      and ask OpenRouter to *exclude* the reasoning trace from the
+      response (`reasoning.exclude=true`) so we get the answer text.
+    * The model ignores ``response_format: json_object`` (confirmed in
+      community reports), so we don't waste a server round-trip on it
+      and parse JSON out of the prose ourselves.
     """
     chosen_model = _get_openrouter_model(model)
-    messages: List[Dict[str, str]] = [
+    messages: list[dict[str, str]] = [
         {"role": "system", "content": _build_system_prompt(lang)},
     ]
     messages.extend(history)
@@ -366,9 +377,13 @@ async def _ask_openrouter(
             json={
                 "model": chosen_model,
                 "messages": messages,
-                "max_tokens": 1024,
-                # Some OpenRouter providers honour this hint and skip prose.
-                "response_format": {"type": "json_object"},
+                # Reasoning models burn tokens on internal CoT before
+                # emitting `content`; 1024 was too tight to leave room
+                # for the actual answer.
+                "max_tokens": 4096,
+                # Exclude the reasoning trace from the response so what
+                # comes back in `content` is the user-facing answer.
+                "reasoning": {"exclude": True},
             },
         )
         response.raise_for_status()
@@ -379,8 +394,25 @@ async def _ask_openrouter(
     if choices:
         msg = choices[0].get("message") or {}
         text = msg.get("content") or ""
+        # Some OpenRouter providers split the answer between `content`
+        # and `reasoning_content` even when we ask to exclude reasoning.
+        # Fall back to the reasoning text so the user never gets an
+        # empty bubble — the JSON parser below tolerates either.
+        if not text.strip():
+            text = msg.get("reasoning_content") or msg.get("reasoning") or ""
+
     parsed = _parse_ai_response(text)
     if parsed is None:
+        if not text.strip():
+            text = (
+                "Sorry, the AI provider returned an empty answer. "
+                "Try re-asking — sometimes a slightly different wording "
+                "wakes the model up."
+                if lang == "en"
+                else "Извините, провайдер ИИ вернул пустой ответ. "
+                "Попробуй переспросить — иногда другая формулировка "
+                "помогает разговорить модель."
+            )
         return _wrap_response(text, [], lang=lang, source="openrouter")
     return _wrap_response(
         _response_message(parsed, text),
@@ -392,9 +424,9 @@ async def _ask_openrouter(
 
 async def ask_starai(
     user_message: str,
-    conversation_history: List[Dict[str, str]] = None,
+    conversation_history: list[dict[str, str]] = None,
     lang: str = "ru",
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Send a message to StarAI and receive response + UI commands.
 
     Provider routing:
@@ -434,10 +466,10 @@ async def ask_starai(
 
 def _wrap_response(
     message: str,
-    actions: List[Any],
+    actions: list[Any],
     lang: str = "ru",
     source: str = "ok",
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Validate the proposed action list and append a human-readable
     warning to the message when some actions are rejected. The UI shows
     the warning so invalid AI output is never silently dropped.
@@ -457,20 +489,26 @@ def _wrap_response(
     }
 
 
-def _fallback_response(user_message: str, lang: str = "ru") -> Dict[str, Any]:
+def _fallback_response(user_message: str, lang: str = "ru") -> dict[str, Any]:
     """Offline responses without API key — extended command set."""
     msg_lower = user_message.lower().strip()
     en = lang == "en"
 
     # ── Greetings ────────────────────────────────────────
-    if any(w in msg_lower for w in ["привет", "здравствуй", "хай", "hello", "добрый", "здрасте", "hi ", " hi"]) or msg_lower == "hi":
+    if (
+        any(
+            w in msg_lower
+            for w in ["привет", "здравствуй", "хай", "hello", "добрый", "здрасте", "hi ", " hi"]
+        )
+        or msg_lower == "hi"
+    ):
         return {
             "message": (
                 "Hello! ✦ I am StarAI — the intelligent assistant of StarVision. "
                 "I can tell you about satellites, control the visualization, "
                 "explain orbital mechanics and much more. Ask away!"
-                if en else
-                "Привет! ✦ Я StarAI — интеллектуальный ассистент StarVision. "
+                if en
+                else "Привет! ✦ Я StarAI — интеллектуальный ассистент StarVision. "
                 "Могу рассказать о спутниках, управлять визуализацией, "
                 "объяснить орбитальную механику и многое другое. Спрашивай!"
             ),
@@ -484,8 +522,8 @@ def _fallback_response(user_message: str, lang: str = "ru") -> Dict[str, Any]:
                 "UniverSat is a Roscosmos program for university CubeSats. "
                 "Our model includes: Dekart (MSU, radiation & ADS-B), NORBI/NORBI-2 (NSU, EO & AIS), "
                 "SamSat-Ionosphere (Samara Univ., ionosphere sounding). Showing UniverSat constellation."
-                if en else
-                "«УниверСат» — программа Роскосмоса по запуску университетских кубсатов. "
+                if en
+                else "«УниверСат» — программа Роскосмоса по запуску университетских кубсатов. "
                 "В нашей модели: Декарт (МГУ, радиация и ADS-B), НОРБИ/НОРБИ-2 (НГУ, ДЗЗ и AIS), "
                 "СамСат-Ионосфера (Самарский ун-т, зондирование ионосферы). Показываю группу."
             ),
@@ -499,8 +537,8 @@ def _fallback_response(user_message: str, lang: str = "ru") -> Dict[str, Any]:
                 "Dekart is a 3U CubeSat (~4 kg) by SINP MSU. "
                 "Monitors radiation on polar orbits and receives ADS-B signals. "
                 "NORAD 46493, launched 2020-09-28. Showing."
-                if en else
-                "«Декарт» — кубсат 3U (~4 кг) НИИЯФ МГУ. "
+                if en
+                else "«Декарт» — кубсат 3U (~4 кг) НИИЯФ МГУ. "
                 "Мониторинг радиационной обстановки на полярных орбитах и приём ADS-B. "
                 "NORAD 46493, запущен 2020-09-28. Показываю."
             ),
@@ -512,29 +550,31 @@ def _fallback_response(user_message: str, lang: str = "ru") -> Dict[str, Any]:
         if any(w in msg_lower for w in ["ярило", "yarilo"]):
             return {
                 "message": (
-                    "Yarilo — a series of CubeSats by Bauman MSTU for solar physics research. "
-                    "Yarilo-1 (1.5U, NORAD 46490) and Yarilo-3 (3U, NORAD 57198) measure "
-                    "solar energy reflected by Earth and the magnetic field. Showing Yarilo-3."
-                    if en else
-                    "Ярило — серия кубсатов МГТУ Баумана для исследования Солнца. "
-                    "Ярило-1 (1.5U, NORAD 46490) и Ярило-3 (3U, NORAD 57198) измеряют "
-                    "солнечную энергию и магнитное поле. Показываю Ярило-3."
+                    "Yarilo was a series of CubeSats by Bauman MSTU for solar physics research. "
+                    "Both Yarilo-1 (NORAD 46490, decayed 2025-03-07) and Yarilo-3 (NORAD 57198, "
+                    "no longer transmitting) are now archival. Today only UmKA-1 represents "
+                    "Bauman MSTU on the live scene — showing it."
+                    if en
+                    else "«Ярило» — серия кубсатов МГТУ Баумана для исследования Солнца. "
+                    "Ярило-1 (NORAD 46490) сошёл с орбиты 7 марта 2025 г., Ярило-3 (NORAD 57198) "
+                    "уже не выходит на связь — оба архивные. Из Баумановских аппаратов в "
+                    "live-сцене сейчас только УмКА-1, его и показываю."
                 ),
-                "actions": [{"type": "focus_satellite", "norad_id": 57198}],
+                "actions": [{"type": "focus_satellite", "norad_id": 57172}],
             }
         return {
             "message": (
-                "Bauman MSTU CubeSats in our model:\n"
-                "• UmKA-1 (3U, ~4 kg) — technology demonstrator, NORAD 57172\n"
-                "• Yarilo-1 (1.5U, ~2 kg) — solar research, NORAD 46490\n"
-                "• Yarilo-3 (3U, ~4 kg) — solar physics, magnetometry, NORAD 57198\n"
-                "Showing UmKA-1."
-                if en else
-                "Кубсаты МГТУ Баумана в нашей модели:\n"
-                "• УмКА-1 (3U, ~4 кг) — технологический демонстратор, NORAD 57172\n"
-                "• Ярило-1 (1.5U, ~2 кг) — исследование Солнца, NORAD 46490\n"
-                "• Ярило-3 (3U, ~4 кг) — солнечная физика, магнитометрия, NORAD 57198\n"
-                "Показываю УмКА-1."
+                "Bauman MSTU spacecraft in the catalog:\n"
+                "• UmKA-1 (3U, ~4 kg) — technology demonstrator, NORAD 57172 — operational\n"
+                "• Yarilo-1 (NORAD 46490) — archival, decayed 2025-03-07\n"
+                "• Yarilo-3 (NORAD 57198) — archival, no longer transmitting\n"
+                "Showing UmKA-1 — the only live Bauman CubeSat."
+                if en
+                else "Аппараты МГТУ Баумана в каталоге:\n"
+                "• УмКА-1 (3U, ~4 кг) — технологический демонстратор, NORAD 57172 — действующий\n"
+                "• Ярило-1 (NORAD 46490) — архив, сошёл с орбиты 07.03.2025\n"
+                "• Ярило-3 (NORAD 57198) — архив, нет приёма с борта\n"
+                "Показываю УмКА-1 — единственный живой кубсат Баумана."
             ),
             "actions": [
                 {"type": "highlight_constellation", "name": "МГТУ Баумана"},
@@ -542,21 +582,37 @@ def _fallback_response(user_message: str, lang: str = "ru") -> Dict[str, Any]:
             ],
         }
 
-    # ── SPUTNIX / CubeSX / HSE ───────────────────────────
-    if any(w in msg_lower for w in ["sputnix", "спутникс", "вшэ", "hse", "cubesx"]):
+    # ── SPUTNIX / CubeSX / HSE / HyperView ────────────────
+    if any(
+        w in msg_lower
+        for w in [
+            "sputnix",
+            "спутникс",
+            "вшэ",
+            "hse",
+            "cubesx",
+            "hyperview",
+            "хайпервью",
+            "гиперспектр",
+        ]
+    ):
         return {
             "message": (
-                "SPUTNIX 3U CubeSats in the model: CubeSX-HSE (NORAD 47952) and CubeSX-HSE-3 "
-                "(NORAD 57178), both with experimental Fresnel-lens cameras and X-band downlinks. "
-                "Showing CubeSX-HSE."
-                if en else
-                "Кубсаты SPUTNIX в модели: CubeSX-HSE (NORAD 47952) и CubeSX-HSE-3 (NORAD 57178) "
-                "с экспериментальными камерами на линзах Френеля и X-передатчиками. "
-                "Показываю CubeSX-HSE."
+                "SPUTNIX spacecraft in our model:\n"
+                "• CubeSX-HSE-3 (3U, NORAD 57178) — Fresnel-lens camera, X-band downlink\n"
+                "• HyperView 1G (6U, NORAD 61772) — hyperspectral Earth imager (RS66S)\n"
+                "Note: CubeSX-HSE (NORAD 47952) decayed 2025-06-07 — archival.\n"
+                "Showing CubeSX-HSE-3."
+                if en
+                else "Кубсаты SPUTNIX в нашей модели:\n"
+                "• CubeSX-HSE-3 (3U, NORAD 57178) — камера на линзах Френеля и X-передатчик\n"
+                "• HyperView 1G (6U, NORAD 61772) — гиперспектральный аппарат ДЗЗ (позывной RS66S)\n"
+                "Примечание: CubeSX-HSE (NORAD 47952) сошёл с орбиты 07.06.2025 — архив.\n"
+                "Показываю CubeSX-HSE-3."
             ),
             "actions": [
                 {"type": "highlight_constellation", "name": "SPUTNIX"},
-                {"type": "focus_satellite", "norad_id": 47952},
+                {"type": "focus_satellite", "norad_id": 57178},
             ],
         }
 
@@ -568,8 +624,8 @@ def _fallback_response(user_message: str, lang: str = "ru") -> Dict[str, Any]:
                 "(NORAD 61749, launched 2024-11-04). It tests the VERA plasma propulsion "
                 "system and a GLONASS/GPS receiver for radio-occultation studies of the "
                 "ionosphere together with RTU MIREA-1. Showing."
-                if en else
-                "Vizard-ion — кубсат 3U компании «МГУ-Стандарт» на платформе «Геоскан 3U» "
+                if en
+                else "Vizard-ion — кубсат 3U компании «МГУ-Стандарт» на платформе «Геоскан 3U» "
                 "(NORAD 61749, запуск 04.11.2024). Лётные испытания плазменного двигателя "
                 "VERA и приёмника ГЛОНАСС/GPS для радиозатменного зондирования ионосферы "
                 "совместно с RTU MIREA-1. Показываю."
@@ -581,18 +637,39 @@ def _fallback_response(user_message: str, lang: str = "ru") -> Dict[str, Any]:
     if any(w in msg_lower for w in ["монитор", "ниияф", "monitor", "sinp", "кодиз", "kodiz"]):
         return {
             "message": (
-                "Monitor-2 is a 3U CubeSat by SINP MSU for X-ray and gamma-ray observations "
-                "of cosmic flares. KODIZ detector onboard. NORAD 57184, launched 2023-06-27. Showing."
-                if en else
-                "Монитор-2 — кубсат 3U НИИЯФ МГУ для наблюдения космических вспышек "
-                "в рентгеновском и гамма-диапазоне. Детектор КОДИЗ на борту. "
-                "NORAD 57184, запущен 2023-06-27. Показываю."
+                "SINP MSU's Monitor-2/3/4 are a trio of 3U CubeSats for X-ray and gamma-ray "
+                "observations of cosmic flares. All three carry the KODIZ detector and were "
+                "launched together on 2023-06-27 (Soyuz-2.1b, Vostochny). NORAD 57184 / 57180 "
+                "/ 57182 — call signs RS39S, RS58S, RS57S. Showing Monitor-2 and highlighting "
+                "the SINP MSU group."
+                if en
+                else "Монитор-2/3/4 — трио кубсатов 3U НИИЯФ МГУ для наблюдения космических "
+                "вспышек в рентгеновском и гамма-диапазоне. У всех на борту детектор КОДИЗ; "
+                "запущены 27.06.2023 (Союз-2.1б, Восточный). NORAD 57184 / 57180 / 57182 — "
+                "позывные RS39S, RS58S, RS57S. Показываю «Монитор-2» и группу НИИЯФ МГУ."
             ),
-            "actions": [{"type": "focus_satellite", "norad_id": 57184}],
+            "actions": [
+                {"type": "highlight_constellation", "name": "НИИЯФ МГУ"},
+                {"type": "focus_satellite", "norad_id": 57184},
+            ],
         }
 
     # ── Space-Pi ─────────────────────────────────────────
-    if any(w in msg_lower for w in ["space-pi", "spacepi", "space pi", "тусур", "tusur", "мирэа", "mirea", "горизонт", "horizont", "asrtu"]):
+    if any(
+        w in msg_lower
+        for w in [
+            "space-pi",
+            "spacepi",
+            "space pi",
+            "тусур",
+            "tusur",
+            "мирэа",
+            "mirea",
+            "горизонт",
+            "horizont",
+            "asrtu",
+        ]
+    ):
         return {
             "message": (
                 "Space-Pi is a Russian educational CubeSat program. Our model includes:\n"
@@ -601,8 +678,8 @@ def _fallback_response(user_message: str, lang: str = "ru") -> Dict[str, Any]:
                 "• Horizont (NORAD 61757) — 2024-11-05\n"
                 "• ASRTU-1 (NORAD 61781) — 2024-11-05\n"
                 "All on SSO ~550 km. Showing Space-Pi."
-                if en else
-                "Space-Pi — российская образовательная программа кубсатов. В нашей модели:\n"
+                if en
+                else "Space-Pi — российская образовательная программа кубсатов. В нашей модели:\n"
                 "• TUSUR GO (NORAD 61782) — ТУСУР, Томск (05.11.2024)\n"
                 "• RTU MIREA-1 (NORAD 61785) — РТУ МИРЭА, Москва (05.11.2024)\n"
                 "• Горизонт (NORAD 61757) — 05.11.2024\n"
@@ -613,13 +690,15 @@ def _fallback_response(user_message: str, lang: str = "ru") -> Dict[str, Any]:
         }
 
     # ── SamSat ───────────────────────────────────────────
-    if any(w in msg_lower for w in ["самсат", "самар", "ионосфер", "samsat", "samara", "ionospher"]):
+    if any(
+        w in msg_lower for w in ["самсат", "самар", "ионосфер", "samsat", "samara", "ionospher"]
+    ):
         return {
             "message": (
                 "SamSat-Ionosphere is a 3U CubeSat by Samara University for ionosphere research. "
                 "Part of the UniverSat program. NORAD 61784, launched 2024-11-05. Showing."
-                if en else
-                "СамСат-Ионосфера — кубсат 3U Самарского университета для исследования ионосферы. "
+                if en
+                else "СамСат-Ионосфера — кубсат 3U Самарского университета для исследования ионосферы. "
                 "Часть программы «УниверСат». NORAD 61784, запущен 2024-11-05. Показываю."
             ),
             "actions": [{"type": "focus_satellite", "norad_id": 61784}],
@@ -628,44 +707,58 @@ def _fallback_response(user_message: str, lang: str = "ru") -> Dict[str, Any]:
     # ── Speed control ────────────────────────────────────
     if any(w in msg_lower for w in ["ускор", "быстр", "speed up", "faster"]):
         # Try to extract a number
-        nums = re.findall(r'\d+', msg_lower)
+        nums = re.findall(r"\d+", msg_lower)
         speed = int(nums[0]) if nums else 50
         speed = min(200, max(1, speed))
         return {
             "message": (
                 f"Speeding up simulation to {speed}×! Satellites will move faster."
-                if en else
-                f"Ускоряю симуляцию в {speed}× раз! Спутники будут двигаться быстрее."
+                if en
+                else f"Ускоряю симуляцию в {speed}× раз! Спутники будут двигаться быстрее."
             ),
             "actions": [{"type": "set_time_speed", "speed": speed}],
         }
 
-    if any(w in msg_lower for w in ["замедл", "стоп", "пауз", "остано", "медленн", "реальн", "slow", "stop", "pause", "real time"]):
+    if any(
+        w in msg_lower
+        for w in [
+            "замедл",
+            "стоп",
+            "пауз",
+            "остано",
+            "медленн",
+            "реальн",
+            "slow",
+            "stop",
+            "pause",
+            "real time",
+        ]
+    ):
         return {
-            "message": (
-                "Returning to real time (1×)."
-                if en else
-                "Возвращаю реальное время (1×)."
-            ),
+            "message": ("Returning to real time (1×)." if en else "Возвращаю реальное время (1×)."),
             "actions": [{"type": "set_time_speed", "speed": 1}],
         }
 
-    if any(w in msg_lower for w in ["врем", "скорость", "time", "speed"]) and not any(w in msg_lower for w in ["сколько", "какой", "какая", "how many", "what"]):
-        nums = re.findall(r'\d+', msg_lower)
+    if any(w in msg_lower for w in ["врем", "скорость", "time", "speed"]) and not any(
+        w in msg_lower for w in ["сколько", "какой", "какая", "how many", "what"]
+    ):
+        nums = re.findall(r"\d+", msg_lower)
         if nums:
             speed = min(200, max(1, int(nums[0])))
             return {
                 "message": (
                     f"Setting simulation speed: {speed}×"
-                    if en else
-                    f"Устанавливаю скорость симуляции: {speed}×"
+                    if en
+                    else f"Устанавливаю скорость симуляции: {speed}×"
                 ),
                 "actions": [{"type": "set_time_speed", "speed": speed}],
             }
 
     # ── Orbits ───────────────────────────────────────────
     if any(w in msg_lower for w in ["орбит", "трек", "траектор", "orbit", "track", "trajectory"]):
-        if any(w in msg_lower for w in ["скры", "убери", "выключ", "спряч", "hide", "off", "disable"]):
+        if any(
+            w in msg_lower for w in ["скры", "убери", "выключ", "спряч", "hide", "off", "disable"]
+        ):
             return {
                 "message": "Hiding orbital tracks." if en else "Скрываю орбитальные треки.",
                 "actions": [{"type": "toggle_orbits", "visible": False}],
@@ -673,8 +766,8 @@ def _fallback_response(user_message: str, lang: str = "ru") -> Dict[str, Any]:
         return {
             "message": (
                 "Enabling orbital track display. Each line shows the satellite path for one orbit."
-                if en else
-                "Включаю отображение орбитальных треков. "
+                if en
+                else "Включаю отображение орбитальных треков. "
                 "Каждая линия показывает путь спутника за один виток."
             ),
             "actions": [{"type": "toggle_orbits", "visible": True}],
@@ -682,18 +775,24 @@ def _fallback_response(user_message: str, lang: str = "ru") -> Dict[str, Any]:
 
     # ── ISL links ────────────────────────────────────────
     if any(w in msg_lower for w in ["связ", "линии", "мсс", "isl", "link"]):
-        if any(w in msg_lower for w in ["скры", "убери", "выключ", "спряч", "hide", "off", "disable"]):
+        if any(
+            w in msg_lower for w in ["скры", "убери", "выключ", "спряч", "hide", "off", "disable"]
+        ):
             return {
-                "message": "Hiding inter-satellite links." if en else "Скрываю линии межспутниковой связи.",
+                "message": (
+                    "Hiding inter-satellite links." if en else "Скрываю линии межспутниковой связи."
+                ),
                 "actions": [{"type": "toggle_links", "visible": False}],
             }
-        if any(w in msg_lower for w in ["покаж", "включ", "отобраз", "show", "on", "enable", "display"]):
+        if any(
+            w in msg_lower for w in ["покаж", "включ", "отобраз", "show", "on", "enable", "display"]
+        ):
             return {
                 "message": (
                     "Enabling inter-satellite links. Green lines — active connections "
                     "within communication range. Red — satellites almost in range."
-                    if en else
-                    "Включаю линии межспутниковой связи. Зелёные линии — активные соединения "
+                    if en
+                    else "Включаю линии межспутниковой связи. Зелёные линии — активные соединения "
                     "в пределах дальности связи. Красные — спутники почти в зоне видимости."
                 ),
                 "actions": [{"type": "toggle_links", "visible": True}],
@@ -706,8 +805,8 @@ def _fallback_response(user_message: str, lang: str = "ru") -> Dict[str, Any]:
                 "• Distance between satellites (communication range threshold)\n"
                 "• Line of sight (link must not intersect Earth)\n"
                 "Green lines — active links, red — potential."
-                if en else
-                "Межспутниковая связь (ISL) — это передача данных между спутниками "
+                if en
+                else "Межспутниковая связь (ISL) — это передача данных между спутниками "
                 "без ретрансляции через наземные станции. В StarVision мы моделируем ISL "
                 "с учётом:\n"
                 "• Расстояния между спутниками (порог дальности связи)\n"
@@ -718,15 +817,28 @@ def _fallback_response(user_message: str, lang: str = "ru") -> Dict[str, Any]:
         }
 
     # ── Satellite count ───────────────────────────────────
-    if any(w in msg_lower for w in ["количеств", "сколько спут", "число спут", "добав", "установи", "how many sat", "satellite count", "set satellite", "add satellite"]):
-        nums = re.findall(r'\d+', msg_lower)
+    if any(
+        w in msg_lower
+        for w in [
+            "количеств",
+            "сколько спут",
+            "число спут",
+            "добав",
+            "установи",
+            "how many sat",
+            "satellite count",
+            "set satellite",
+            "add satellite",
+        ]
+    ):
+        nums = re.findall(r"\d+", msg_lower)
         if nums:
             count = min(15, max(3, int(nums[0])))
             return {
                 "message": (
                     f"Setting {count} satellites in the constellation."
-                    if en else
-                    f"Устанавливаю {count} спутников в группировке."
+                    if en
+                    else f"Устанавливаю {count} спутников в группировке."
                 ),
                 "actions": [{"type": "set_satellite_count", "count": count}],
             }
@@ -735,8 +847,8 @@ def _fallback_response(user_message: str, lang: str = "ru") -> Dict[str, Any]:
                 "The catalog holds 15 real Russian operational CubeSats and that is also "
                 "the slider cap (3–15). Change the slider in the control panel or tell me, "
                 "e.g.: 'Set 10 satellites'."
-                if en else
-                "В каталоге 15 реальных действующих российских кубсатов — это же и предел "
+                if en
+                else "В каталоге 15 реальных действующих российских кубсатов — это же и предел "
                 "ползунка (3–15). Меняй ползунок в панели управления или скажи, например: "
                 "«Установи 10 спутников»."
             ),
@@ -744,8 +856,11 @@ def _fallback_response(user_message: str, lang: str = "ru") -> Dict[str, Any]:
         }
 
     # ── Communication range ───────────────────────────────
-    if any(w in msg_lower for w in ["дальност", "радиус связ", "зона связ", "comm range", "communication range"]):
-        nums = re.findall(r'\d+', msg_lower)
+    if any(
+        w in msg_lower
+        for w in ["дальност", "радиус связ", "зона связ", "comm range", "communication range"]
+    ):
+        nums = re.findall(r"\d+", msg_lower)
         if nums:
             rng = min(2000, max(50, int(nums[0])))
             return {
@@ -753,8 +868,8 @@ def _fallback_response(user_message: str, lang: str = "ru") -> Dict[str, Any]:
                     f"Setting communication range: {rng} km. "
                     "Links will be displayed between satellites "
                     "within this distance threshold."
-                    if en else
-                    f"Устанавливаю дальность связи: {rng} км. "
+                    if en
+                    else f"Устанавливаю дальность связи: {rng} км. "
                     "Линии связи будут отображаться между спутниками, "
                     "расстояние между которыми не превышает этот порог."
                 ),
@@ -764,8 +879,8 @@ def _fallback_response(user_message: str, lang: str = "ru") -> Dict[str, Any]:
             "message": (
                 "Communication range defines the maximum distance between satellites "
                 "for establishing a connection. Typical values: 500–1500 km for LEO."
-                if en else
-                "Дальность связи определяет максимальное расстояние между спутниками "
+                if en
+                else "Дальность связи определяет максимальное расстояние между спутниками "
                 "для установления соединения. Типичные значения: 500–1500 км для LEO."
             ),
             "actions": [],
@@ -773,7 +888,9 @@ def _fallback_response(user_message: str, lang: str = "ru") -> Dict[str, Any]:
 
     # ── Coverage zones ────────────────────────────────────
     if any(w in msg_lower for w in ["покрыти", "зоны покрыт", "footprint", "coverage", "фут"]):
-        if any(w in msg_lower for w in ["скры", "убери", "выключ", "спряч", "hide", "off", "disable"]):
+        if any(
+            w in msg_lower for w in ["скры", "убери", "выключ", "спряч", "hide", "off", "disable"]
+        ):
             return {
                 "message": "Hiding coverage zones." if en else "Скрываю зоны покрытия.",
                 "actions": [{"type": "toggle_coverage", "visible": False}],
@@ -782,22 +899,32 @@ def _fallback_response(user_message: str, lang: str = "ru") -> Dict[str, Any]:
             "message": (
                 "Enabling coverage zone display! Each zone shows the satellite's ground footprint — "
                 "the area on Earth's surface visible from the spacecraft at 0° elevation."
-                if en else
-                "Включаю отображение зон покрытия! Каждая зона показывает проекцию спутника "
+                if en
+                else "Включаю отображение зон покрытия! Каждая зона показывает проекцию спутника "
                 "на поверхность Земли — область, видимую с борта КА при угле места 0°."
             ),
             "actions": [{"type": "toggle_coverage", "visible": True}],
         }
 
     # ── Active links — information ────────────────────────
-    if any(w in msg_lower for w in ["сколько связ", "активных связ", "количество связ", "how many link", "active link", "link count"]):
+    if any(
+        w in msg_lower
+        for w in [
+            "сколько связ",
+            "активных связ",
+            "количество связ",
+            "how many link",
+            "active link",
+            "link count",
+        ]
+    ):
         return {
             "message": (
                 "The current number of active inter-satellite links is shown in the header (ISL counter). "
                 "It depends on the communication range and satellite positions. "
                 "Try enabling links to see them!"
-                if en else
-                "Текущее количество активных межспутниковых связей отображается в шапке (счётчик МСС). "
+                if en
+                else "Текущее количество активных межспутниковых связей отображается в шапке (счётчик МСС). "
                 "Оно зависит от дальности связи и позиций спутников. "
                 "Попробуй включить линии связи, чтобы увидеть их!"
             ),
@@ -806,15 +933,15 @@ def _fallback_response(user_message: str, lang: str = "ru") -> Dict[str, Any]:
 
     # ── Orbit altitude ────────────────────────────────────
     if any(w in msg_lower for w in ["высот", "altitude"]):
-        nums = re.findall(r'\d+', msg_lower)
+        nums = re.findall(r"\d+", msg_lower)
         if nums:
             alt = min(2000, max(0, int(nums[0])))
             if alt == 0:
                 return {
                     "message": (
                         "Switching to real TLE satellite orbits."
-                        if en else
-                        "Переключаюсь на реальные TLE-орбиты спутников."
+                        if en
+                        else "Переключаюсь на реальные TLE-орбиты спутников."
                     ),
                     "actions": [{"type": "set_orbit_altitude", "altitude_km": 0}],
                 }
@@ -822,8 +949,8 @@ def _fallback_response(user_message: str, lang: str = "ru") -> Dict[str, Any]:
                 "message": (
                     f"Setting virtual circular orbit altitude: {alt} km. "
                     "All satellites will be evenly distributed at this altitude."
-                    if en else
-                    f"Устанавливаю высоту виртуальной круговой орбиты: {alt} км. "
+                    if en
+                    else f"Устанавливаю высоту виртуальной круговой орбиты: {alt} км. "
                     "Все спутники будут равномерно распределены на этой высоте."
                 ),
                 "actions": [{"type": "set_orbit_altitude", "altitude_km": alt}],
@@ -831,7 +958,9 @@ def _fallback_response(user_message: str, lang: str = "ru") -> Dict[str, Any]:
 
     # ── Satellite labels ──────────────────────────────────
     if any(w in msg_lower for w in ["подпис", "метки", "label", "имена спут", "назван спут"]):
-        if any(w in msg_lower for w in ["скры", "убери", "выключ", "спряч", "hide", "off", "disable"]):
+        if any(
+            w in msg_lower for w in ["скры", "убери", "выключ", "спряч", "hide", "off", "disable"]
+        ):
             return {
                 "message": "Hiding satellite labels." if en else "Скрываю подписи спутников.",
                 "actions": [{"type": "toggle_labels", "visible": False}],
@@ -839,31 +968,60 @@ def _fallback_response(user_message: str, lang: str = "ru") -> Dict[str, Any]:
         return {
             "message": (
                 "Enabling satellite labels on the visualization."
-                if en else
-                "Включаю подписи спутников на визуализации."
+                if en
+                else "Включаю подписи спутников на визуализации."
             ),
             "actions": [{"type": "toggle_labels", "visible": True}],
         }
 
     # ── Show satellite by name ────────────────────────────
-    if any(w in msg_lower for w in ["покаж", "найди", "где ", "фокус", "show", "find", "where", "focus"]):
+    if any(
+        w in msg_lower
+        for w in ["покаж", "найди", "где ", "фокус", "show", "find", "where", "focus"]
+    ):
         sat_map = {
-            # Real satellites in our system (correct NORAD IDs)
-            "декарт": 46493, "dekart": 46493,
-            "норби-2": 57179, "norbi-2": 57179, "норби2": 57179,
-            "норби": 46494, "norbi": 46494,
-            "ярило-1": 46490, "yarilo-1": 46490, "ярило1": 46490,
-            "ярило-3": 57198, "yarilo-3": 57198, "ярило3": 57198,
-            "ярило": 57198, "yarilo": 57198,
-            "умка": 57172, "umka": 57172, "умка-1": 57172,
-            "cubesx-hse-3": 57178, "cubesx-3": 57178,
-            "cubesx-hse": 47952, "cubesx": 47952,
-            "vizard-ion": 61749, "визард-ион": 61749, "vizard ion": 61749, "vizard": 61749,
-            "монитор": 57184, "monitor": 57184,
-            "самсат": 61784, "samsat": 61784, "ионосфер": 61784,
-            "tusur": 61782, "тусур": 61782,
-            "mirea": 61785, "мирэа": 61785,
-            "горизонт": 61757, "horizont": 61757,
+            # Operational satellites in our 15-craft active catalog.
+            # Archival NORAD IDs (46490 Yarilo-1, 47952 CubeSX-HSE, 57198
+            # Yarilo-3) intentionally aren't here — focus_satellite would
+            # be rejected by the validator anyway.
+            "декарт": 46493,
+            "dekart": 46493,
+            "норби-2": 57179,
+            "norbi-2": 57179,
+            "норби2": 57179,
+            "норби": 46494,
+            "norbi": 46494,
+            "умка": 57172,
+            "umka": 57172,
+            "умка-1": 57172,
+            "cubesx-hse-3": 57178,
+            "cubesx-3": 57178,
+            "cubesx": 57178,
+            "hyperview": 61772,
+            "хайпервью": 61772,
+            "гиперспектр": 61772,
+            "vizard-ion": 61749,
+            "визард-ион": 61749,
+            "vizard ion": 61749,
+            "vizard": 61749,
+            "визард": 61749,
+            "монитор-2": 57184,
+            "monitor-2": 57184,
+            "монитор-3": 57180,
+            "monitor-3": 57180,
+            "монитор-4": 57182,
+            "monitor-4": 57182,
+            "монитор": 57184,
+            "monitor": 57184,
+            "самсат": 61784,
+            "samsat": 61784,
+            "ионосфер": 61784,
+            "tusur": 61782,
+            "тусур": 61782,
+            "mirea": 61785,
+            "мирэа": 61785,
+            "горизонт": 61757,
+            "horizont": 61757,
             "asrtu": 61781,
         }
         for name, nid in sat_map.items():
@@ -876,9 +1034,7 @@ def _fallback_response(user_message: str, lang: str = "ru") -> Dict[str, Any]:
                 sat_name = sat_info.name if sat_info else f"NORAD {nid}"
                 return {
                     "message": (
-                        f"Focusing camera on {sat_name}."
-                        if en else
-                        f"Навожу камеру на {sat_name}."
+                        f"Focusing camera on {sat_name}." if en else f"Навожу камеру на {sat_name}."
                     ),
                     "actions": [{"type": "focus_satellite", "norad_id": nid}],
                 }
@@ -888,14 +1044,28 @@ def _fallback_response(user_message: str, lang: str = "ru") -> Dict[str, Any]:
         return {
             "message": (
                 "Resetting all parameters to default values."
-                if en else
-                "Сбрасываю все параметры к начальным значениям."
+                if en
+                else "Сбрасываю все параметры к начальным значениям."
             ),
             "actions": [{"type": "reset_view"}],
         }
 
     # ── Kepler / orbital mechanics ────────────────────────
-    if any(w in msg_lower for w in ["кеплер", "механик", "физик", "гравитац", "закон", "kepler", "mechanic", "physic", "gravit", "law"]):
+    if any(
+        w in msg_lower
+        for w in [
+            "кеплер",
+            "механик",
+            "физик",
+            "гравитац",
+            "закон",
+            "kepler",
+            "mechanic",
+            "physic",
+            "gravit",
+            "law",
+        ]
+    ):
         return {
             "message": (
                 "Orbital mechanics is based on Kepler's laws:\n"
@@ -904,8 +1074,8 @@ def _fallback_response(user_message: str, lang: str = "ru") -> Dict[str, Any]:
                 "3. T² ∝ a³ (period² is proportional to semi-major axis³)\n\n"
                 "In StarVision we use the SGP4 model for precise satellite position calculation "
                 "accounting for atmospheric drag, J2 gravitational harmonics and other perturbations."
-                if en else
-                "Орбитальная механика основана на законах Кеплера:\n"
+                if en
+                else "Орбитальная механика основана на законах Кеплера:\n"
                 "1. Орбиты — эллипсы с центром масс в фокусе\n"
                 "2. Радиус-вектор заметает равные площади за равное время\n"
                 "3. T² ∝ a³ (период² пропорционален полуоси³)\n\n"
@@ -917,7 +1087,10 @@ def _fallback_response(user_message: str, lang: str = "ru") -> Dict[str, Any]:
         }
 
     # ── Starlink / OneWeb / comparison ───────────────────
-    if any(w in msg_lower for w in ["starlink", "oneweb", "сравн", "илон", "маск", "compar", "elon", "musk"]):
+    if any(
+        w in msg_lower
+        for w in ["starlink", "oneweb", "сравн", "илон", "маск", "compar", "elon", "musk"]
+    ):
         return {
             "message": (
                 "Comparison of major constellations:\n"
@@ -927,8 +1100,8 @@ def _fallback_response(user_message: str, lang: str = "ru") -> Dict[str, Any]:
                 "• Gonets-M: ~12 satellites, 1500 km, personal comms\n\n"
                 "Russian constellations focus on polar coverage "
                 "and multi-purpose design (comms + IoT + observation)."
-                if en else
-                "Сравнение крупнейших группировок:\n"
+                if en
+                else "Сравнение крупнейших группировок:\n"
                 "• Starlink (SpaceX): ~5000+ спутников, 550 км, ШПД\n"
                 "• OneWeb: ~600 спутников, 1200 км, ШПД\n"
                 "• Сфера (Россия): планируется 600+ КА, связь + IoT + ДЗЗ\n"
@@ -949,8 +1122,8 @@ def _fallback_response(user_message: str, lang: str = "ru") -> Dict[str, Any]:
                 "SGP4 is an analytical propagation model that accounts for "
                 "J2 perturbations, atmospheric drag and other effects. "
                 "We use it for real-time position calculation."
-                if en else
-                "TLE (Two-Line Elements) — двухстрочные элементы орбиты. "
+                if en
+                else "TLE (Two-Line Elements) — двухстрочные элементы орбиты. "
                 "Это стандартный формат описания орбиты, включающий:\n"
                 "• Наклонение, RAAN, эксцентриситет\n"
                 "• Аргумент перигея, средняя аномалия\n"
@@ -963,7 +1136,10 @@ def _fallback_response(user_message: str, lang: str = "ru") -> Dict[str, Any]:
         }
 
     # ── CubeSat / form factor ─────────────────────────────
-    if any(w in msg_lower for w in ["кубсат", "cubesat", "формфактор", "форм-фактор", "размер", "form factor", "size"]):
+    if any(
+        w in msg_lower
+        for w in ["кубсат", "cubesat", "формфактор", "форм-фактор", "размер", "form factor", "size"]
+    ):
         return {
             "message": (
                 "CubeSat — small satellite standard:\n"
@@ -973,8 +1149,8 @@ def _fallback_response(user_message: str, lang: str = "ru") -> Dict[str, Any]:
                 "• 12U: 20×20×30 cm, ~24 kg (Dekart)\n\n"
                 "Standardization reduces launch costs and enables "
                 "use of unified deployers."
-                if en else
-                "CubeSat — стандарт малых спутников:\n"
+                if en
+                else "CubeSat — стандарт малых спутников:\n"
                 "• 1U: 10×10×10 см, ~1.3 кг (СириусСат)\n"
                 "• 3U: 10×10×30 см, ~4 кг (УмКА-1)\n"
                 "• 6U: 10×20×30 см, ~12 кг (Марафон-IoT)\n"
@@ -986,7 +1162,19 @@ def _fallback_response(user_message: str, lang: str = "ru") -> Dict[str, Any]:
         }
 
     # ── Help ──────────────────────────────────────────────
-    if any(w in msg_lower for w in ["помощ", "help", "команд", "что ты умеешь", "что можешь", "возможност", "what can you", "capabilities"]):
+    if any(
+        w in msg_lower
+        for w in [
+            "помощ",
+            "help",
+            "команд",
+            "что ты умеешь",
+            "что можешь",
+            "возможност",
+            "what can you",
+            "capabilities",
+        ]
+    ):
         return {
             "message": (
                 "Here's what I can do:\n"
@@ -999,8 +1187,8 @@ def _fallback_response(user_message: str, lang: str = "ru") -> Dict[str, Any]:
                 "✦ Explain mechanics: 'What is SGP4?', 'Kepler's laws'\n"
                 "✦ Compare: 'Compare Starlink and Sfera'\n"
                 "✦ Reset everything: 'Reset'"
-                if en else
-                "Вот что я умею:\n"
+                if en
+                else "Вот что я умею:\n"
                 "✦ Рассказать о спутниках: «Расскажи про УмКА-1», «Что такое УниверСат?»\n"
                 "✦ Показать спутник: «Покажи Декарт», «Где Ярило-3?»\n"
                 "✦ Управлять скоростью: «Ускорь в 50 раз», «Замедли»\n"
@@ -1015,7 +1203,10 @@ def _fallback_response(user_message: str, lang: str = "ru") -> Dict[str, Any]:
         }
 
     # ── Collisions / close approaches ────────────────────
-    if any(w in msg_lower for w in ["коллизи", "столкнов", "сближен", "опасност", "collision", "close approach"]):
+    if any(
+        w in msg_lower
+        for w in ["коллизи", "столкнов", "сближен", "опасност", "collision", "close approach"]
+    ):
         return {
             "message": (
                 "Collision prediction is an important constellation management task. "
@@ -1026,8 +1217,8 @@ def _fallback_response(user_message: str, lang: str = "ru") -> Dict[str, Any]:
                 "• Avoidance maneuvers at P(collision) > 10⁻⁴\n"
                 "• Walker distribution minimizes risk within the constellation\n\n"
                 "Use API: /api/collisions for predictions."
-                if en else
-                "Прогнозирование коллизий — важная задача управления группировкой. "
+                if en
+                else "Прогнозирование коллизий — важная задача управления группировкой. "
                 "StarVision анализирует траектории всех спутников на 24 часа вперёд "
                 "и выявляет потенциальные сближения (порог: 100 км).\n\n"
                 "Основные методы предотвращения:\n"
@@ -1040,8 +1231,11 @@ def _fallback_response(user_message: str, lang: str = "ru") -> Dict[str, Any]:
         }
 
     # ── Plane optimization ────────────────────────────────
-    if any(w in msg_lower for w in ["оптимиз", "walker", "распредел", "плоскост", "optimiz", "plane", "distribut"]):
-        nums = re.findall(r'\d+', msg_lower)
+    if any(
+        w in msg_lower
+        for w in ["оптимиз", "walker", "распредел", "плоскост", "optimiz", "plane", "distribut"]
+    ):
+        nums = re.findall(r"\d+", msg_lower)
         if nums:
             planes = min(7, max(1, int(nums[0])))
             return {
@@ -1049,8 +1243,8 @@ def _fallback_response(user_message: str, lang: str = "ru") -> Dict[str, Any]:
                     f"Setting {planes} orbital plane{'s' if planes != 1 else ''}. "
                     "Satellites will be distributed evenly across these planes "
                     "using the Walker-δ pattern."
-                    if en else
-                    f"Устанавливаю {planes} орбитальн{'ых плоскостей' if planes > 4 else 'ые плоскости' if planes > 1 else 'ую плоскость'}. "
+                    if en
+                    else f"Устанавливаю {planes} орбитальн{'ых плоскостей' if planes > 4 else 'ые плоскости' if planes > 1 else 'ую плоскость'}. "
                     "Спутники будут равномерно распределены по плоскостям "
                     "по схеме Walker-δ."
                 ),
@@ -1069,8 +1263,8 @@ def _fallback_response(user_message: str, lang: str = "ru") -> Dict[str, Any]:
                 "✦ Uniform ISL channel load\n\n"
                 "Use the 'Orbital planes' slider in the control panel "
                 "or tell me, e.g.: 'Set 5 planes'."
-                if en else
-                "Оптимизация распределения по орбитальным плоскостям использует "
+                if en
+                else "Оптимизация распределения по орбитальным плоскостям использует "
                 "модель Walker-δ constellation (T/P/F):\n\n"
                 "• T — общее число спутников\n"
                 "• P — число орбитальных плоскостей\n"
@@ -1086,7 +1280,10 @@ def _fallback_response(user_message: str, lang: str = "ru") -> Dict[str, Any]:
         }
 
     # ── Space / general questions ─────────────────────────
-    if any(w in msg_lower for w in ["космос", "мкс", "ракет", "запуск", "space", "iss", "rocket", "launch"]):
+    if any(
+        w in msg_lower
+        for w in ["космос", "мкс", "ракет", "запуск", "space", "iss", "rocket", "launch"]
+    ):
         return {
             "message": (
                 "Small satellite launches are typically carried out as secondary payloads "
@@ -1094,8 +1291,8 @@ def _fallback_response(user_message: str, lang: str = "ru") -> Dict[str, Any]:
                 "From the ISS, satellites are deployed through the Kibo module (JAXA) airlock. "
                 "Russia is also developing the Sputnix platform "
                 "for serial small spacecraft production."
-                if en else
-                "Космические запуски малых спутников обычно осуществляются как попутная "
+                if en
+                else "Космические запуски малых спутников обычно осуществляются как попутная "
                 "нагрузка на ракетах-носителях «Союз-2», Falcon 9 или специализированных "
                 "носителях для кубсатов. С МКС спутники выводятся через шлюзовую камеру "
                 "модуля Kibo (JAXA). Россия также развивает платформу «Спутникс» "
@@ -1105,25 +1302,49 @@ def _fallback_response(user_message: str, lang: str = "ru") -> Dict[str, Any]:
         }
 
     # ── Thanks ────────────────────────────────────────────
-    if any(w in msg_lower for w in ["спасибо", "благодар", "круто", "класс", "отлично", "thanks", "thank you", "great", "awesome"]):
+    if any(
+        w in msg_lower
+        for w in [
+            "спасибо",
+            "благодар",
+            "круто",
+            "класс",
+            "отлично",
+            "thanks",
+            "thank you",
+            "great",
+            "awesome",
+        ]
+    ):
         return {
             "message": (
                 "Glad to help! ✦ If you have more questions about satellites or visualization — "
                 "just ask. I'm always online!"
-                if en else
-                "Рад помочь! ✦ Если есть ещё вопросы о спутниках или визуализации — "
+                if en
+                else "Рад помочь! ✦ Если есть ещё вопросы о спутниках или визуализации — "
                 "спрашивай. Я всегда на связи!"
             ),
             "actions": [],
         }
 
     # ── Show everything / enable all ─────────────────────
-    if any(w in msg_lower for w in ["покажи всё", "покажи все", "включи всё", "включи все", "show all", "enable all", "show everything"]):
+    if any(
+        w in msg_lower
+        for w in [
+            "покажи всё",
+            "покажи все",
+            "включи всё",
+            "включи все",
+            "show all",
+            "enable all",
+            "show everything",
+        ]
+    ):
         return {
             "message": (
                 "Enabling all visualizations: orbits, links, coverage zones and labels!"
-                if en else
-                "Включаю все визуализации: орбиты, связи, зоны покрытия и подписи!"
+                if en
+                else "Включаю все визуализации: орбиты, связи, зоны покрытия и подписи!"
             ),
             "actions": [
                 {"type": "toggle_orbits", "visible": True},
@@ -1144,8 +1365,8 @@ def _fallback_response(user_message: str, lang: str = "ru") -> Dict[str, Any]:
             "✦ Change orbits: 'Altitude 600 km', 'Set 10 satellites'\n"
             "✦ Explain mechanics: 'What is SGP4?', 'Kepler's laws'\n\n"
             "Try asking me something!"
-            if en else
-            "Я StarAI — интеллектуальный ассистент StarVision. Вот что я могу:\n"
+            if en
+            else "Я StarAI — интеллектуальный ассистент StarVision. Вот что я могу:\n"
             "✦ Рассказать о спутниках: «Расскажи про УмКА-1»\n"
             "✦ Показать спутник: «Покажи Декарт», «Где Ярило-3?»\n"
             "✦ Управлять скоростью: «Ускорь в 50 раз», «Замедли»\n"

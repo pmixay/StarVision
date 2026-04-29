@@ -5,16 +5,21 @@ client-facing responses. The public contract is a stable, opaque set of
 error codes (see celestrak.ERR_*).
 """
 
-import pytest
 from unittest.mock import patch
+
+import pytest
 
 import celestrak
 from celestrak import (
-    ERR_TIMEOUT, ERR_NETWORK, ERR_UPSTREAM, ERR_EMPTY,
-    get_tle_by_source, _classify_network_error, invalidate_cache,
+    ERR_EMPTY,
+    ERR_NETWORK,
+    ERR_TIMEOUT,
+    ERR_UPSTREAM,
+    _classify_network_error,
+    get_tle_by_source,
+    invalidate_cache,
 )
 from satellites import RUSSIAN_CUBESATS, is_operational
-
 
 SAFE_CODES = {ERR_TIMEOUT, ERR_NETWORK, ERR_UPSTREAM, ERR_EMPTY}
 
@@ -33,9 +38,15 @@ def _has_raw_exception_marker(value) -> bool:
     if not isinstance(value, str):
         return False
     bad_markers = [
-        "Traceback", "File \"", "line ",
-        "Error:", "Exception:", "RuntimeError", "ValueError",
-        "<class ", "object at 0x",
+        "Traceback",
+        'File "',
+        "line ",
+        "Error:",
+        "Exception:",
+        "RuntimeError",
+        "ValueError",
+        "<class ",
+        "object at 0x",
     ]
     return any(m in value for m in bad_markers)
 
@@ -95,6 +106,7 @@ async def test_partial_celestrak_uses_contract_source_name():
 @pytest.mark.asyncio
 async def test_cache_status_error_field_is_safe_or_none():
     from celestrak import get_cache_status
+
     status = get_cache_status()
     err = status.get("last_fetch_error")
     # On a fresh state it is None; on failure it is one of SAFE_CODES.

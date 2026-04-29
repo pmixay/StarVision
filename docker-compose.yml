@@ -1,0 +1,50 @@
+# StarVision — one-shot deploy for jury / hackathon judges.
+#
+#   docker compose up --build
+#
+# Frontend → http://localhost:8080
+# Backend  → http://localhost:8000  (proxied at /api by nginx)
+#
+# To enable StarAI: create backend/.env with OPENROUTER_API_KEY=...
+# (the file is git-ignored).
+
+services:
+  backend:
+    build:
+      context: ./backend
+    image: starvision-backend:latest
+    container_name: starvision-backend
+    restart: unless-stopped
+    environment:
+      CORS_ORIGINS: "http://localhost:8080,http://127.0.0.1:8080"
+      PYTHONUNBUFFERED: "1"
+    env_file:
+      - path: ./backend/.env
+        required: false
+    expose:
+      - "8000"
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_BASE: /api
+        # Set VITE_CUBESAT_GLB=/models/cubesat.glb to use a real glTF model.
+        # See frontend/public/models/README.md for details.
+        VITE_CUBESAT_GLB: ${VITE_CUBESAT_GLB:-}
+    image: starvision-frontend:latest
+    container_name: starvision-frontend
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "8080:80"
