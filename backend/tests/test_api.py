@@ -32,10 +32,10 @@ async def test_list_satellites(client):
     assert resp.status_code == 200
     data = resp.json()
     assert "satellites" in data
-    # Catalog grew to 17 with no archival entries; see test_satellites.py
-    assert data["count"] == 17
-    assert len(data["satellites"]) == 17
-    assert data["operational_count"] == 17
+    # Catalog cap is 15 with no archival entries; see test_satellites.py
+    assert data["count"] == 15
+    assert len(data["satellites"]) == 15
+    assert data["operational_count"] == 15
     assert data["archive_count"] == 0
     for sat in data["satellites"]:
         assert "operational" in sat
@@ -101,7 +101,7 @@ async def test_get_positions(client):
     assert resp.status_code == 200
     data = resp.json()
     assert "positions" in data
-    assert len(data["positions"]) == 17  # all catalog entries are operational
+    assert len(data["positions"]) == 15  # all catalog entries are operational
     pos = data["positions"][0]
     assert "eci" in pos
     assert "altitude_km" in pos
@@ -153,8 +153,8 @@ async def test_get_all_orbit_paths_batch(client):
         assert int(nid) > 0
         assert len(path) == 10
         assert {"x", "y", "z"} <= set(path[0].keys())
-    # All 17 active satellites should be present in batch.
-    assert len(data["paths"]) == 17
+    # All 15 active satellites should be present in batch.
+    assert len(data["paths"]) == 15
 
 
 @pytest.mark.asyncio

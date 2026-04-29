@@ -208,10 +208,10 @@ RESPONSE FORMAT — strictly JSON:
 Russian CubeSats in the system (NORAD ID):
 - UniverSat program: Dekart (46493), NORBI (46494), NORBI-2 (57179), SamSat-Ionosphere (61784)
 - Bauman MSTU: Yarilo-1 (46490), UmKA-1 (57172), Yarilo-3 (57198)
-- SPUTNIX: CubeSX-HSE (47952), CubeSX-HSE-3 (57178), VIZARD-meteo (57189)
+- SPUTNIX: CubeSX-HSE (47952), CubeSX-HSE-3 (57178)
 - Geoscan: Vizard-ion (61749)
 - SINP MSU: Monitor-2 (57184)
-- Space-Pi: ReshUCube-2 (57168), TUSUR GO (61782), RTU MIREA-1 (61785), Horizont (61757), ASRTU-1 (61781)
+- Space-Pi: TUSUR GO (61782), RTU MIREA-1 (61785), Horizont (61757), ASRTU-1 (61781)
 
 {lang_instruction}
 Be friendly, informative, and passionate about space.
@@ -542,19 +542,17 @@ def _fallback_response(user_message: str, lang: str = "ru") -> Dict[str, Any]:
             ],
         }
 
-    # ── SPUTNIX / CubeSX / HSE / VIZARD-meteo ────────────
-    if any(w in msg_lower for w in ["sputnix", "спутникс", "вшэ", "hse", "cubesx", "vizard-meteo", "vizard meteo"]):
+    # ── SPUTNIX / CubeSX / HSE ───────────────────────────
+    if any(w in msg_lower for w in ["sputnix", "спутникс", "вшэ", "hse", "cubesx"]):
         return {
             "message": (
                 "SPUTNIX 3U CubeSats in the model: CubeSX-HSE (NORAD 47952) and CubeSX-HSE-3 "
-                "(NORAD 57178), both with experimental Fresnel-lens cameras and X-band downlinks; "
-                "and VIZARD-meteo (NORAD 57189), an Arctic remote-sensing CubeSat that monitors "
-                "oil spills and dangerous weather along the Northern Sea Route. Showing CubeSX-HSE."
+                "(NORAD 57178), both with experimental Fresnel-lens cameras and X-band downlinks. "
+                "Showing CubeSX-HSE."
                 if en else
                 "Кубсаты SPUTNIX в модели: CubeSX-HSE (NORAD 47952) и CubeSX-HSE-3 (NORAD 57178) "
-                "с экспериментальными камерами на линзах Френеля и X-передатчиками; а также "
-                "VIZARD-meteo (NORAD 57189) — арктический ДЗЗ-кубсат для мониторинга разливов "
-                "нефти и опасных метеоявлений на Северном морском пути. Показываю CubeSX-HSE."
+                "с экспериментальными камерами на линзах Френеля и X-передатчиками. "
+                "Показываю CubeSX-HSE."
             ),
             "actions": [
                 {"type": "highlight_constellation", "name": "SPUTNIX"},
@@ -594,11 +592,10 @@ def _fallback_response(user_message: str, lang: str = "ru") -> Dict[str, Any]:
         }
 
     # ── Space-Pi ─────────────────────────────────────────
-    if any(w in msg_lower for w in ["space-pi", "spacepi", "space pi", "тусур", "tusur", "мирэа", "mirea", "горизонт", "horizont", "asrtu", "reshucube", "решуcube", "решуkуб", "решетнев"]):
+    if any(w in msg_lower for w in ["space-pi", "spacepi", "space pi", "тусур", "tusur", "мирэа", "mirea", "горизонт", "horizont", "asrtu"]):
         return {
             "message": (
                 "Space-Pi is a Russian educational CubeSat program. Our model includes:\n"
-                "• ReshUCube-2 (NORAD 57168) — SibSU Reshetnev (2023-06-27)\n"
                 "• TUSUR GO (NORAD 61782) — Tomsk (2024-11-05)\n"
                 "• RTU MIREA-1 (NORAD 61785) — Moscow (2024-11-05)\n"
                 "• Horizont (NORAD 61757) — 2024-11-05\n"
@@ -606,7 +603,6 @@ def _fallback_response(user_message: str, lang: str = "ru") -> Dict[str, Any]:
                 "All on SSO ~550 km. Showing Space-Pi."
                 if en else
                 "Space-Pi — российская образовательная программа кубсатов. В нашей модели:\n"
-                "• ReshUCube-2 (NORAD 57168) — СибГУ им. Решетнёва (27.06.2023)\n"
                 "• TUSUR GO (NORAD 61782) — ТУСУР, Томск (05.11.2024)\n"
                 "• RTU MIREA-1 (NORAD 61785) — РТУ МИРЭА, Москва (05.11.2024)\n"
                 "• Горизонт (NORAD 61757) — 05.11.2024\n"
@@ -736,13 +732,13 @@ def _fallback_response(user_message: str, lang: str = "ru") -> Dict[str, Any]:
             }
         return {
             "message": (
-                "The catalog has 17 real Russian operational CubeSats; the visualisation "
-                "displays up to 15 of them at once. Change the slider (3–15) in the control "
-                "panel or tell me, e.g.: 'Set 10 satellites'."
+                "The catalog holds 15 real Russian operational CubeSats and that is also "
+                "the slider cap (3–15). Change the slider in the control panel or tell me, "
+                "e.g.: 'Set 10 satellites'."
                 if en else
-                "В каталоге 17 реальных действующих российских кубсатов; визуализация "
-                "показывает одновременно до 15. Меняй ползунок (3–15) в панели управления "
-                "или скажи, например: «Установи 10 спутников»."
+                "В каталоге 15 реальных действующих российских кубсатов — это же и предел "
+                "ползунка (3–15). Меняй ползунок в панели управления или скажи, например: "
+                "«Установи 10 спутников»."
             ),
             "actions": [],
         }
@@ -862,9 +858,7 @@ def _fallback_response(user_message: str, lang: str = "ru") -> Dict[str, Any]:
             "умка": 57172, "umka": 57172, "умка-1": 57172,
             "cubesx-hse-3": 57178, "cubesx-3": 57178,
             "cubesx-hse": 47952, "cubesx": 47952,
-            "vizard-meteo": 57189, "визард-метео": 57189, "vizard meteo": 57189,
             "vizard-ion": 61749, "визард-ион": 61749, "vizard ion": 61749, "vizard": 61749,
-            "reshucube-2": 57168, "reshucube": 57168, "решетнев": 57168,
             "монитор": 57184, "monitor": 57184,
             "самсат": 61784, "samsat": 61784, "ионосфер": 61784,
             "tusur": 61782, "тусур": 61782,
@@ -939,7 +933,7 @@ def _fallback_response(user_message: str, lang: str = "ru") -> Dict[str, Any]:
                 "• OneWeb: ~600 спутников, 1200 км, ШПД\n"
                 "• Сфера (Россия): планируется 600+ КА, связь + IoT + ДЗЗ\n"
                 "• УниверСат / Space-Pi: образовательные кубсаты российских вузов\n\n"
-                "В нашей модели — 17 реальных российских кубсатов на ССО ~500–550 км."
+                "В нашей модели — 15 реальных российских кубсатов на ССО ~500–550 км."
             ),
             "actions": [],
         }

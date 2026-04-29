@@ -210,7 +210,7 @@ graph TD
 StarVision/
 ├── backend/
 │   ├── main.py               # FastAPI endpoints (REST API)
-│   ├── satellites.py         # Catalog of 17 Russian CubeSats + TLE
+│   ├── satellites.py         # Catalog of 15 Russian CubeSats + TLE
 │   ├── orbital.py            # SGP4 propagation, ECI → geodetic conversions
 │   ├── celestrak.py          # CelesTrak TLE loader + async cache
 │   ├── ai_assistant.py       # StarAI — OpenRouter API + offline fallback
@@ -274,7 +274,7 @@ StarVision построен по классической **клиент-сер�
 StarVision/
 ├── backend/
 │   ├── main.py               # FastAPI эндпоинты (REST API)
-│   ├── satellites.py         # Каталог 17 российских КА + TLE
+│   ├── satellites.py         # Каталог 15 российских КА + TLE
 │   ├── orbital.py            # SGP4-пропагация, ECI → геодезические
 │   ├── celestrak.py          # Загрузка TLE с CelesTrak + асинхронный кэш
 │   ├── ai_assistant.py       # StarAI — OpenRouter API + оффлайн fallback

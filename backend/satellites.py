@@ -96,32 +96,6 @@ RUSSIAN_CUBESATS: List[SatelliteInfo] = [
 
     # --- Launch 2023-06-27, Soyuz-2.1b, Vostochny (SSO ~550 km, i≈97.6°) ---
     SatelliteInfo(
-        norad_id=57168,
-        name="ReshUCube-2",
-        constellation="Space-Pi",
-        purpose="Реконфигурируемая лаборатория, IoT/межспутниковая связь",
-        mass_kg=4.0,
-        form_factor="3U",
-        launch_date="2023-06-27",
-        status="active",
-        tle_line1="1 57168U 23091C   26091.50000000  .00000310  00000-0  20000-4 0  9995",
-        tle_line2="2 57168  97.6100  30.0000 0012500  88.0000  35.0000 15.09500000 15003",
-        description="Кубсат СибГУ им. М.Ф. Решетнёва (Красноярск) в рамках программы Space-π — продолжение реконфигурируемой космической лаборатории ReshUCube для отработки протоколов межспутниковой связи и IoT-терминалов."
-    ),
-    SatelliteInfo(
-        norad_id=57189,
-        name="VIZARD-meteo",
-        constellation="SPUTNIX",
-        purpose="ДЗЗ Арктики, мониторинг разливов нефти",
-        mass_kg=4.0,
-        form_factor="3U",
-        launch_date="2023-06-27",
-        status="active",
-        tle_line1="1 57189U 23091AB  26091.50000000  .00000300  00000-0  19500-4 0  9990",
-        tle_line2="2 57189  97.6100  30.0000 0013000  92.0000  90.0000 15.09000000 15003",
-        description="Кубсат VIZARD-meteo (RS38S, SPUTNIX OrbiCraft-Pro) — две камеры ДЗЗ для мониторинга арктических вод, нефтяных разливов и опасных метеоявлений на Северном морском пути."
-    ),
-    SatelliteInfo(
         norad_id=57172,
         name="УмКА-1",
         constellation="МГТУ Баумана",

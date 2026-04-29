@@ -5,7 +5,7 @@ from satellites import (
     get_all_satellites, get_satellite_by_id, get_tle_data,
 )
 
-EXPECTED_COUNT = 17
+EXPECTED_COUNT = 15
 
 
 class TestSatelliteCatalog:
@@ -106,11 +106,6 @@ class TestGetSatelliteById:
         assert v is not None
         assert v.constellation == "Геоскан"
         assert v.status == "active"
-        # ReshUCube-2 (Space-π, SibSU Reshetnev)
-        r = get_satellite_by_id(57168)
-        assert r is not None
-        assert r.constellation == "Space-Pi"
-        assert r.status == "active"
 
 
 class TestGetTleData:
@@ -123,8 +118,7 @@ class TestGetTleData:
         norad_ids = [item["norad_id"] for item in tle_list]
         assert 46493 in norad_ids  # Dekart
         assert 46490 in norad_ids  # Yarilo-1
-        assert 61749 in norad_ids  # Vizard-ion (new)
-        assert 57168 in norad_ids  # ReshUCube-2 (new)
+        assert 61749 in norad_ids  # Vizard-ion
 
     def test_tle_data_shape(self):
         tle_list = get_tle_data()
