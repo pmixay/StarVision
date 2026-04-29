@@ -3,15 +3,17 @@ main.py — StarVision Backend (FastAPI)
 Digital twin of a Russian CubeSat constellation.
 """
 
+import asyncio
 import logging
 import math
 import os
 import time
 from collections import deque
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from threading import Lock
-from typing import Deque, Dict, List, Optional
+from typing import AsyncIterator, Deque, Dict, List, Optional
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, Query, HTTPException, Request
@@ -46,10 +48,32 @@ ALLOWED_ORIGINS = [
     if o.strip()
 ]
 
+@asynccontextmanager
+async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    """Fire-and-forget CelesTrak prefetch so the very first user click on
+    "CelesTrak" finds the cache already populated, instead of waiting
+    ~10 s for the cold round-trip. Failure is logged and ignored — the
+    endpoint still works via embedded fallback.
+    """
+    async def _bg():
+        try:
+            await fetch_celestrak_tle()
+        except Exception:
+            logging.getLogger(__name__).exception("CelesTrak warm-up failed")
+
+    task = asyncio.create_task(_bg())
+    try:
+        yield
+    finally:
+        if not task.done():
+            task.cancel()
+
+
 app = FastAPI(
     title="StarVision API",
     description="Digital twin API for Russian CubeSat constellation",
-    version="1.2.0",
+    version="1.3.0",
+    lifespan=_lifespan,
 )
 
 app.add_middleware(
@@ -59,24 +83,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
-@app.on_event("startup")
-async def _warm_celestrak_cache() -> None:
-    """Fire-and-forget CelesTrak prefetch so the very first user click on
-    "CelesTrak" finds the cache already populated, instead of waiting
-    ~10 s for the cold round-trip. Failure is logged and ignored — the
-    endpoint still works via embedded fallback.
-    """
-    import asyncio as _asyncio
-
-    async def _bg():
-        try:
-            await fetch_celestrak_tle()
-        except Exception:
-            logging.getLogger(__name__).exception("CelesTrak warm-up failed")
-
-    _asyncio.create_task(_bg())
 
 
 # ── Request models ──────────────────────────────────────────────────

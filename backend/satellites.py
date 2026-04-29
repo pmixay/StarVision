@@ -1,11 +1,15 @@
 """
 satellites.py — Russian CubeSat catalog.
-Real satellites with valid TLE data (synthetic epochs, realistic orbital parameters).
-In production — load current TLE from CelesTrak / SpaceTrack.
+
+Every entry corresponds to a real spacecraft listed in the NORAD catalog.
+TLE epochs are synthetic (anchored at 2026-04-01) and orbital parameters
+match each satellite's documented sun-synchronous LEO insertion — when a
+live source is needed, the API serves CelesTrak data instead.
 """
 
 from dataclasses import dataclass
 from typing import List, Optional
+
 
 @dataclass
 class SatelliteInfo:
@@ -90,23 +94,33 @@ RUSSIAN_CUBESATS: List[SatelliteInfo] = [
         description="Первый спутник ВШЭ на платформе SPUTNIX — экспериментальная камера на ступенчатых (Френелевских) линзах."
     ),
 
-    # --- Launch 2022-08-09, Soyuz-2.1b, Baikonur (SSO ~480 km, i≈97.4°) ---
+    # --- Launch 2023-06-27, Soyuz-2.1b, Vostochny (SSO ~550 km, i≈97.6°) ---
     SatelliteInfo(
-        norad_id=53385,
-        name="Геоскан-Эдельвейс",
-        constellation="Геоскан",
-        purpose="Тест платформы, двигатель, GNSS",
+        norad_id=57168,
+        name="ReshUCube-2",
+        constellation="Space-Pi",
+        purpose="Реконфигурируемая лаборатория, IoT/межспутниковая связь",
         mass_kg=4.0,
         form_factor="3U",
-        launch_date="2022-08-09",
-        status="deorbited",
-        tle_line1="1 53385U 22096R   24040.50000000  .00001200  00000-0  70000-4 0  9992",
-        tle_line2="2 53385  97.4300 310.0000 0008000  60.0000 300.0000 15.25000000 85006",
-        description="Первый частный наноспутник из Санкт-Петербурга (Геоскан). Лётные испытания платформы, газовый двигатель ОКБ «Факел». Сведён с орбиты 2024-02-18.",
-        archive_date="2024-02-18",
+        launch_date="2023-06-27",
+        status="active",
+        tle_line1="1 57168U 23091C   26091.50000000  .00000310  00000-0  20000-4 0  9995",
+        tle_line2="2 57168  97.6100  30.0000 0012500  88.0000  35.0000 15.09500000 15003",
+        description="Кубсат СибГУ им. М.Ф. Решетнёва (Красноярск) в рамках программы Space-π — продолжение реконфигурируемой космической лаборатории ReshUCube для отработки протоколов межспутниковой связи и IoT-терминалов."
     ),
-
-    # --- Launch 2023-06-27, Soyuz-2.1b, Vostochny (SSO ~550 km, i≈97.6°) ---
+    SatelliteInfo(
+        norad_id=57189,
+        name="VIZARD-meteo",
+        constellation="SPUTNIX",
+        purpose="ДЗЗ Арктики, мониторинг разливов нефти",
+        mass_kg=4.0,
+        form_factor="3U",
+        launch_date="2023-06-27",
+        status="active",
+        tle_line1="1 57189U 23091AB  26091.50000000  .00000300  00000-0  19500-4 0  9990",
+        tle_line2="2 57189  97.6100  30.0000 0013000  92.0000  90.0000 15.09000000 15003",
+        description="Кубсат VIZARD-meteo (RS38S, SPUTNIX OrbiCraft-Pro) — две камеры ДЗЗ для мониторинга арктических вод, нефтяных разливов и опасных метеоявлений на Северном морском пути."
+    ),
     SatelliteInfo(
         norad_id=57172,
         name="УмКА-1",
@@ -238,6 +252,19 @@ RUSSIAN_CUBESATS: List[SatelliteInfo] = [
         tle_line1="1 61781U 24199AY  26091.50000000  .00000230  00000-0  16000-4 0  9997",
         tle_line2="2 61781  97.5800 240.0000 0009000  85.0000 100.0000 15.09500000  7000",
         description="Кубсат Ассоциации российских технических университетов. Позывной RS64S."
+    ),
+    SatelliteInfo(
+        norad_id=61749,
+        name="Vizard-ion",
+        constellation="Геоскан",
+        purpose="Плазменный двигатель VERA, радиозатменное зондирование ионосферы",
+        mass_kg=4.0,
+        form_factor="3U",
+        launch_date="2024-11-04",
+        status="active",
+        tle_line1="1 61749U 24199Q   26091.50000000  .00000270  00000-0  17800-4 0  9994",
+        tle_line2="2 61749  97.5800 240.0000 0010200  72.0000 195.0000 15.08800000  7000",
+        description="Кубсат группы VIZARD.Space (МГУ-Стандарт) на платформе Геоскан 3U — лётные испытания плазменного двигателя VERA и приёмника ГЛОНАСС/GPS для радиозатменного зондирования ионосферы совместно с RTU MIREA-1."
     ),
 ]
 

@@ -13,9 +13,17 @@ from satellites import RUSSIAN_CUBESATS, SatelliteInfo, is_operational
 # ── Constants ──────────────────────────────────────────────────────
 EARTH_RADIUS_KM = 6371.0
 MU = 398600.4418            # km³/s² — Earth gravitational parameter
-J2 = 1.08263e-3             # second zonal harmonic
 DEG2RAD = math.pi / 180.0
 RAD2DEG = 180.0 / math.pi
+
+# ── Satrec cache ───────────────────────────────────────────────────
+# Building a Satrec from TLE strings is fast but not free, and /api/positions
+# rebuilds 17 of them on every poll. Cache by the exact (line1, line2) pair so
+# we hit the parser only when the TLE actually changes (e.g. CelesTrak refresh
+# brings new orbital elements). The dict is bounded by the number of distinct
+# TLE pairs the process sees during a session, which is small (catalog size +
+# CelesTrak refresh count).
+_SATREC_CACHE: Dict[Tuple[str, str], Satrec] = {}
 
 
 def _walker_layout(total: int, planes: int) -> tuple[int, int, int, int]:
@@ -101,8 +109,18 @@ def _with_tle(sat: SatelliteInfo, tle1: str, tle2: str) -> SatelliteInfo:
 
 
 def tle_to_satrec(tle1: str, tle2: str) -> Satrec:
-    """Create SGP4 object from TLE lines."""
-    return Satrec.twoline2rv(tle1, tle2, WGS72)
+    """Return a cached Satrec for the given TLE pair, parsing on first miss.
+
+    Satrec is internally mutable (sgp4 stores propagation state on the object)
+    but `sgp4.api.Satrec.sgp4()` reads only the elements set during
+    twoline2rv, so concurrent callers can share the same instance safely.
+    """
+    key = (tle1, tle2)
+    cached = _SATREC_CACHE.get(key)
+    if cached is None:
+        cached = Satrec.twoline2rv(tle1, tle2, WGS72)
+        _SATREC_CACHE[key] = cached
+    return cached
 
 
 def propagate_satellite(sat_info: SatelliteInfo, dt: datetime) -> Dict[str, Any]:

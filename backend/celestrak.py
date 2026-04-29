@@ -54,10 +54,21 @@ FETCH_WALL_CLOCK_BUDGET_SEC = 6.0
 
 _tle_cache: Dict[int, Tuple[str, str]] = {}
 _cache_timestamp: float = 0.0
-_cache_lock: asyncio.Lock = asyncio.Lock()
+# Lock and in-flight future are lazy-initialised so the module can be imported
+# before any event loop exists (asyncio primitives bind to the current loop on
+# construction; that fails under uvicorn's deferred startup).
+_cache_lock: Optional[asyncio.Lock] = None
+_inflight_fetch: Optional["asyncio.Future[Dict[int, Tuple[str, str]]]"] = None
 _last_fetch_ok: bool = False
 _last_fetch_error: Optional[str] = None
 _last_fetch_attempt: float = 0.0
+
+
+def _get_cache_lock() -> asyncio.Lock:
+    global _cache_lock
+    if _cache_lock is None:
+        _cache_lock = asyncio.Lock()
+    return _cache_lock
 
 
 # Sanitised error codes that are safe to return to external clients.
@@ -195,33 +206,75 @@ def _parse_tle_text(text: str) -> Dict[int, Tuple[str, str]]:
 
 
 async def fetch_celestrak_tle(norad_ids: Optional[List[int]] = None) -> Dict[int, Tuple[str, str]]:
-    """
-    Загрузить TLE с CelesTrak для указанных NORAD ID.
-    Если norad_ids=None, загружает для всех спутников из каталога.
-    Возвращает dict: norad_id -> (tle_line1, tle_line2).
-    Потокобезопасен благодаря asyncio.Lock.
+    """Fetch TLE from CelesTrak for the given NORAD IDs (catalog by default).
+
+    Concurrency model:
+    * A fast cache check runs without the lock — fresh, fully-populated cache
+      returns immediately so polling endpoints don't queue behind each other.
+    * If a network fetch is in flight, all callers share its result via the
+      `_inflight_fetch` future. This collapses thundering-herd refreshes into
+      a single round-trip.
+    * The cache mutex (`_get_cache_lock()`) is only held while deciding whether
+      to start a new fetch — never during the HTTP wait.
     """
     global _tle_cache, _cache_timestamp, _last_fetch_ok, _last_fetch_error, _last_fetch_attempt
+    global _inflight_fetch
 
     if norad_ids is None:
         # Operational satellites only — CelesTrak returns 404 for decayed sats.
         norad_ids = [s.norad_id for s in RUSSIAN_CUBESATS if is_operational(s.status)]
 
-    async with _cache_lock:
-        # Check cache (inside lock to prevent duplicate requests)
+    # Fast path: serve from fresh cache without taking the lock.
+    now = time.time()
+    if _tle_cache and (now - _cache_timestamp) < CACHE_TTL_SEC:
+        cached = {nid: _tle_cache[nid] for nid in norad_ids if nid in _tle_cache}
+        if len(cached) == len(norad_ids):
+            return cached
+
+    # Single-flight: coalesce concurrent refresh callers behind a shared
+    # future so we never run two CelesTrak fetches in parallel.
+    lock = _get_cache_lock()
+    async with lock:
         now = time.time()
+        # Re-check after acquiring the lock — another caller may have just
+        # populated the cache while we were waiting.
         if _tle_cache and (now - _cache_timestamp) < CACHE_TTL_SEC:
             cached = {nid: _tle_cache[nid] for nid in norad_ids if nid in _tle_cache}
             if len(cached) == len(norad_ids):
-                logger.debug("TLE cache hit: %d/%d satellites", len(cached), len(norad_ids))
                 return cached
+        if _inflight_fetch is not None and not _inflight_fetch.done():
+            shared = _inflight_fetch
+        else:
+            shared = asyncio.get_running_loop().create_future()
+            _inflight_fetch = shared
+            asyncio.create_task(_run_celestrak_fetch(list(norad_ids), shared))
 
-        # Try to load from group files
-        all_tle: Dict[int, Tuple[str, str]] = {}
-        target_set = set(norad_ids)
-        network_error: Optional[str] = None
-        _last_fetch_attempt = time.time()
+    try:
+        await shared
+    except Exception:
+        # The runner records the failure in module state; we still attempt
+        # to serve any stale cache below.
+        pass
 
+    cached_now = {nid: _tle_cache[nid] for nid in norad_ids if nid in _tle_cache}
+    return cached_now
+
+
+async def _run_celestrak_fetch(
+    norad_ids: List[int],
+    future: "asyncio.Future[Dict[int, Tuple[str, str]]]",
+) -> None:
+    """Worker that performs the actual CelesTrak round-trip.
+    Always settles `future` (so awaiters wake up) and resets `_inflight_fetch`."""
+    global _tle_cache, _cache_timestamp, _last_fetch_ok, _last_fetch_error, _last_fetch_attempt
+    global _inflight_fetch
+
+    all_tle: Dict[int, Tuple[str, str]] = {}
+    target_set = set(norad_ids)
+    network_error: Optional[str] = None
+    _last_fetch_attempt = time.time()
+
+    try:
         try:
             # Single-pass parallel fetch: kick off group files AND a
             # per-NORAD lookup for every requested satellite at the same
@@ -287,7 +340,6 @@ async def fetch_celestrak_tle(norad_ids: Optional[List[int]] = None) -> Dict[int
             logger.exception("CelesTrak network error")
             network_error = ERR_NETWORK
 
-        # Update cache
         if all_tle:
             _tle_cache.update(all_tle)
             _cache_timestamp = time.time()
@@ -297,23 +349,20 @@ async def fetch_celestrak_tle(norad_ids: Optional[List[int]] = None) -> Dict[int
                 "TLE cache updated: %d/%d satellites fetched from CelesTrak",
                 len(all_tle), len(norad_ids),
             )
-            result = {}
-            for nid in norad_ids:
-                if nid in all_tle:
-                    result[nid] = all_tle[nid]
-                elif nid in _tle_cache:
-                    result[nid] = _tle_cache[nid]
-            return result
+            future.set_result({nid: _tle_cache[nid] for nid in norad_ids if nid in _tle_cache})
+            return
 
         _last_fetch_ok = False
         _last_fetch_error = network_error or ERR_EMPTY
-
-        # Network down — serve stale cache if available
         if _tle_cache:
             logger.warning("CelesTrak unavailable, using stale cache (%d entries)", len(_tle_cache))
-            return {nid: _tle_cache[nid] for nid in norad_ids if nid in _tle_cache}
-
-        return {}
+        future.set_result({nid: _tle_cache[nid] for nid in norad_ids if nid in _tle_cache})
+    finally:
+        if not future.done():
+            future.set_result({})
+        # Release the in-flight slot so the next caller can trigger a fresh fetch.
+        if _inflight_fetch is future:
+            _inflight_fetch = None
 
 
 async def _fetch_url(client: httpx.AsyncClient, url: str) -> Dict[int, Tuple[str, str]]:
@@ -495,3 +544,6 @@ def invalidate_cache():
     _last_fetch_ok = False
     _last_fetch_error = None
     _last_fetch_attempt = 0.0
+    # An in-flight fetch is intentionally left alone — its result will simply
+    # populate the freshly-cleared cache when it lands. Cancelling here would
+    # raise CancelledError in every awaiter coalesced behind it.
