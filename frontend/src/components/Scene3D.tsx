@@ -1,7 +1,9 @@
-import { Suspense, lazy, useRef, useMemo, useEffect, useCallback } from 'react';
+import { Suspense, lazy, useRef, useMemo, useEffect, useCallback, type ElementRef } from 'react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { OrbitControls, Stars, PerspectiveCamera } from '@react-three/drei';
 import { Group, Vector3 } from 'three';
+
+type OrbitControlsRef = ElementRef<typeof OrbitControls>;
 import { twoline2satrec, propagate } from 'satellite.js';
 import { getSimTime } from '../simClock';
 import { Earth, EARTH_ROTATION_SPEED } from './Earth';
@@ -83,7 +85,7 @@ interface CameraControllerProps {
   satelliteCount: number;
   orbitalPlanes: number;
   inclinationDeg: number;
-  controlsRef: React.RefObject<any>;
+  controlsRef: React.RefObject<OrbitControlsRef>;
 }
 
 function CameraController({ tleData, orbitAltitudeKm, satelliteCount, orbitalPlanes, inclinationDeg, controlsRef }: CameraControllerProps) {
@@ -253,7 +255,7 @@ function SceneContent({ positions, tleData, orbitPaths, satelliteConstellations 
     selectSatellite,
   } = useStore();
 
-  const controlsRef = useRef<any>(null);
+  const controlsRef = useRef<OrbitControlsRef>(null);
 
   return (
     <>
