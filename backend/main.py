@@ -106,7 +106,11 @@ MAX_CHAT_HISTORY_ITEMS = 30
 
 class ChatMessage(BaseModel):
     role: str = Field(..., pattern="^(user|assistant)$")
-    content: str = Field(..., min_length=1, max_length=MAX_CHAT_CONTENT_LEN)
+    # Allow empty content for history items: a previous assistant turn may
+    # have produced no text (provider blip, JSON-only output) but the user
+    # still expects to follow up. Rejecting the whole request with 422
+    # would orphan the conversation.
+    content: str = Field(default="", max_length=MAX_CHAT_CONTENT_LEN)
 
 
 class ChatRequest(BaseModel):
@@ -627,7 +631,14 @@ async def get_optimized_planes(
 async def starai_chat(req: ChatRequest, request: Request):
     """Chat with StarAI — response + UI commands."""
     _check_chat_rate_limit(request)
-    history = [{"role": m.role, "content": m.content} for m in req.history]
+    # Drop blank history turns before forwarding to the model: providers
+    # reject `{"role": "assistant", "content": ""}` with a validation
+    # error, and the empty entries carry no useful conversation signal
+    # anyway (they're typically the leftover of a prior empty-response
+    # bug we've already fixed).
+    history = [
+        {"role": m.role, "content": m.content} for m in req.history if (m.content or "").strip()
+    ]
     result = await ask_starai(
         req.message,
         history,

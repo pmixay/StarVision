@@ -162,7 +162,11 @@ export async function sendChatMessage(
   history: ChatMessage[],
   lang: string = 'ru',
 ): Promise<APIChatResponse> {
-  const boundedHistory = history.slice(-MAX_CHAT_HISTORY_ITEMS);
+  // Strip blank messages before bounding the window — a previous AI
+  // hiccup that produced an empty bubble would otherwise occupy a
+  // history slot and trip the backend's per-message validator.
+  const cleanedHistory = history.filter((m) => (m.content ?? '').trim().length > 0);
+  const boundedHistory = cleanedHistory.slice(-MAX_CHAT_HISTORY_ITEMS);
   const body: Record<string, unknown> = {
     message,
     history: boundedHistory.map((m) => ({ role: m.role, content: m.content })),

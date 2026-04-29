@@ -166,15 +166,24 @@ html, body, #root {
 }
 
 /* ── Satellite label ─────────────────────────────────── */
+/* No text-shadow on the label: shadows force a per-frame text repaint
+ * that flickers at high simulation speeds when the parent transform
+ * changes every frame. A solid translucent backdrop with a hairline
+ * border gives the same readability without the GPU repaint cost. */
 .sat-label {
   font-family: 'JetBrains Mono', monospace;
   font-size: 11px;
-  color: #a8d8ff;
-  text-shadow:
-    0 0 4px rgba(0, 0, 0, 0.8),
-    0 0 8px rgba(51, 137, 255, 0.6);
+  color: #cfe9ff;
+  background: rgba(5, 12, 28, 0.55);
+  padding: 2px 6px;
+  border-radius: 4px;
+  border: 1px solid rgba(120, 180, 255, 0.18);
   pointer-events: none;
   white-space: nowrap;
+  /* Pin to the GPU layer: the browser then composites the existing
+   * raster instead of rasterising every transform tick. */
+  will-change: transform, opacity;
+  transform: translateZ(0);
 }
 
 /* ── Range slider ────────────────────────────────────── */

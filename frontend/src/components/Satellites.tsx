@@ -310,12 +310,16 @@ function CubeSatModel({
 
 // ── Single satellite marker ──────────────────────────────────────────
 interface SatMarkerProps {
+  noradId: number;
   name: string;
   constellation: string;
   isSelected: boolean;
   isHighlighted: boolean;
   showLabel: boolean;
-  onClick: () => void;
+  // Stable selection callback: SatMarker forwards its noradId so the
+  // parent doesn't have to bake a fresh closure per marker on every
+  // render (which busted React.memo and caused needless reconciliation).
+  onSelect: (noradId: number) => void;
   // When using client-side SGP4, position is updated in useFrame via groupRef
   initPos: Vector3;
   // For client-side SGP4: ref to function returning current ECI position
@@ -323,23 +327,31 @@ interface SatMarkerProps {
 }
 
 // Hysteresis thresholds for the line-of-sight occlusion test (Earth radius = 1).
-// When a satellite skirts the limb at high simulation speed, a single binary
-// threshold flips on/off frame-by-frame and the label appears to flicker.
-// The two-threshold scheme requires the geometry to clearly cross either side
-// before changing the label state, which kills the boundary jitter.
-const LABEL_HIDE_DIST = 0.95;
-const LABEL_SHOW_DIST = 0.99;
+// `LABEL_HIDE_DIST` is well inside Earth so a satellite must be *clearly*
+// occluded to hide its label; `LABEL_SHOW_DIST` is on the surface so a
+// satellite must be *clearly* in front to show it. The wide gap absorbs
+// the rapid distToCenter oscillations that happen every time a fast-moving
+// camera grazes the limb at high simulation speed — that was the single
+// most visible source of label flicker.
+const LABEL_HIDE_DIST = 0.85;
+const LABEL_SHOW_DIST = 1.0;
 
 const SatMarker = memo(function SatMarker({
+  noradId,
   name,
   constellation,
   isSelected,
   isHighlighted,
   showLabel,
-  onClick,
+  onSelect,
   initPos,
   getECI,
 }: SatMarkerProps) {
+  // Bind the noradId once per marker so the click handler reference is
+  // stable for the lifetime of the marker. Without this, the JSX
+  // `onClick={...}` literal is a new closure every render and the
+  // memo'd marker re-renders even when nothing else changed.
+  const handleClick = useCallback(() => onSelect(noradId), [onSelect, noradId]);
   const groupRef = useRef<Group>(null);
   const bodyRef = useRef<Group>(null);
   // Drive the label visibility through a DOM ref + opacity transition rather
@@ -402,7 +414,7 @@ const SatMarker = memo(function SatMarker({
   });
 
   return (
-    <group ref={groupRef} position={initPos} onClick={onClick}>
+    <group ref={groupRef} position={initPos} onClick={handleClick}>
       <group ref={bodyRef}>
         <CubeSatModel
           modelType={modelType}
@@ -424,12 +436,15 @@ const SatMarker = memo(function SatMarker({
       {/* Label — kept mounted while showLabel is true; visibility is driven
           via opacity through a DOM ref to avoid React remounts that would
           otherwise blink the label whenever the satellite crosses the
-          Earth horizon. */}
+          Earth horizon. `distanceFactor` is intentionally left out: it
+          rescaled the DOM element every frame from the camera distance,
+          which forced the browser to re-rasterise the text on every
+          tick at high sim speed and showed up as flicker. A static
+          font size composites cleanly through the GPU. */}
       {showLabel && (
         <Html
           position={[0, 0.05, 0]}
           center
-          distanceFactor={3}
           // Cap label z-index below the UI panels (which sit at z-10/z-20).
           // Default drei range starts at 16777271, which makes labels float
           // over the open control panel. Keep relative ordering inside the
@@ -440,11 +455,11 @@ const SatMarker = memo(function SatMarker({
           <div
             ref={labelDivRef}
             className="sat-label"
-            style={{ color, opacity: 1, transition: 'opacity 160ms ease-out' }}
+            style={{ color, opacity: 1, transition: 'opacity 220ms ease-out' }}
           >
             {name}
             {isSelected && (
-              <div style={{ fontSize: '8px', opacity: 0.7 }}>
+              <div style={{ fontSize: '9px', opacity: 0.7, marginTop: '1px' }}>
                 {constellation}
               </div>
             )}
@@ -658,6 +673,19 @@ export function Satellites({
     return new Vector3(2, 0, 0);
   }
 
+  // Single stable selection callback shared by every SatMarker. Reads
+  // the "currently selected" id through a ref so the closure identity
+  // never changes — that keeps SatMarker memoisation effective even
+  // when the selection changes every click.
+  const selectedRef = useRef(selectedSatellite);
+  selectedRef.current = selectedSatellite;
+  const handleSelect = useCallback(
+    (noradId: number) => {
+      onSelectSatellite(selectedRef.current === noradId ? null : noradId);
+    },
+    [onSelectSatellite],
+  );
+
   return (
     <group>
       {/* ── Виртуальные спутники ───────────────────────────── */}
@@ -668,14 +696,13 @@ export function Satellites({
         return (
           <SatMarker
             key={sat.norad_id}
+            noradId={sat.norad_id}
             name={sat.name}
             constellation={sat.constellation}
             isSelected={selectedSatellite === sat.norad_id}
             isHighlighted={isHighlighted}
             showLabel={showLabels}
-            onClick={() => onSelectSatellite(
-              selectedSatellite === sat.norad_id ? null : sat.norad_id
-            )}
+            onSelect={handleSelect}
             initPos={getInitialPos(sat.norad_id)}
             getECI={getGetECI(sat.norad_id)}
           />
@@ -691,14 +718,13 @@ export function Satellites({
         return (
           <SatMarker
             key={pos.norad_id}
+            noradId={pos.norad_id}
             name={pos.name}
             constellation={constellation}
             isSelected={selectedSatellite === pos.norad_id}
             isHighlighted={isHighlighted}
             showLabel={showLabels}
-            onClick={() => onSelectSatellite(
-              selectedSatellite === pos.norad_id ? null : pos.norad_id
-            )}
+            onSelect={handleSelect}
             initPos={getInitialPos(pos.norad_id)}
             getECI={getGetECI(pos.norad_id)}
           />

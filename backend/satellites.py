@@ -64,6 +64,8 @@ RUSSIAN_CUBESATS: list[SatelliteInfo] = [
         description="Кубсат НГУ (Новосибирск) — дистанционное зондирование Земли и приём сигналов AIS морских судов.",
     ),
     SatelliteInfo(
+        # Decayed 2025-03-07 (re-entered atmosphere). Kept in catalog as
+        # archival history; never propagated for live scene/positions.
         norad_id=46490,
         name="Ярило-1",
         constellation="МГТУ Баумана",
@@ -71,13 +73,15 @@ RUSSIAN_CUBESATS: list[SatelliteInfo] = [
         mass_kg=2.0,
         form_factor="1.5U",
         launch_date="2020-09-28",
-        status="active",
-        tle_line1="1 46490U 20068E   26091.50000000  .00000500  00000-0  30000-4 0  9994",
-        tle_line2="2 46490  97.4100  90.0000 0010000  75.0000  40.0000 15.23000000 28003",
-        description="Кубсат МГТУ им. Баумана для исследования солнечной активности и солнечно-земных связей.",
+        status="deorbited",
+        archive_date="2025-03-07",
+        tle_line1="",
+        tle_line2="",
+        description="Кубсат МГТУ им. Баумана для исследования солнечной активности и солнечно-земных связей. Сошёл с орбиты 7 марта 2025 г.",
     ),
     # --- Launch 2021-03-22, Soyuz-2.1a, Baikonur (SSO ~530 km, i≈97.5°) ---
     SatelliteInfo(
+        # Decayed 2025-06-07 (re-entered atmosphere). Kept as archival.
         norad_id=47952,
         name="CubeSX-HSE",
         constellation="SPUTNIX",
@@ -85,10 +89,11 @@ RUSSIAN_CUBESATS: list[SatelliteInfo] = [
         mass_kg=4.0,
         form_factor="3U",
         launch_date="2021-03-22",
-        status="active",
-        tle_line1="1 47952U 21022W   26091.50000000  .00000380  00000-0  24000-4 0  9998",
-        tle_line2="2 47952  97.4500 200.0000 0013000  90.0000 120.0000 15.15000000 26002",
-        description="Первый спутник ВШЭ на платформе SPUTNIX — экспериментальная камера на ступенчатых (Френелевских) линзах.",
+        status="deorbited",
+        archive_date="2025-06-07",
+        tle_line1="",
+        tle_line2="",
+        description="Первый спутник ВШЭ на платформе SPUTNIX — экспериментальная камера на ступенчатых (Френелевских) линзах. Сошёл с орбиты 7 июня 2025 г.",
     ),
     # --- Launch 2023-06-27, Soyuz-2.1b, Vostochny (SSO ~550 km, i≈97.6°) ---
     SatelliteInfo(
@@ -144,6 +149,9 @@ RUSSIAN_CUBESATS: list[SatelliteInfo] = [
         description="Кубсат НИИЯФ МГУ — наблюдение космических вспышек в рентгеновском и гамма-диапазоне, детектор КОДИЗ.",
     ),
     SatelliteInfo(
+        # No longer present in CelesTrak's active catalog (no recent
+        # observations on SatNOGS); treated as inactive even if not
+        # formally re-entered yet.
         norad_id=57198,
         name="Ярило-3",
         constellation="МГТУ Баумана",
@@ -151,10 +159,56 @@ RUSSIAN_CUBESATS: list[SatelliteInfo] = [
         mass_kg=4.0,
         form_factor="3U",
         launch_date="2023-06-27",
+        status="inactive",
+        archive_date="2025-04-01",
+        tle_line1="",
+        tle_line2="",
+        description="Кубсат МГТУ Баумана — измерение солнечной энергии, отражённой Землёй, и магнитного поля по трём осям. С 2025 года не числится в активном каталоге CelesTrak (нет приёма с борта).",
+    ),
+    # ── Replacements for the three deorbited / inactive spacecraft ───────
+    # NORAD 57180 / 57182 / 61772 are all real, currently-active Russian
+    # CubeSats from the same launches as the rest of the catalog. They
+    # restore the operational count to 15 after the 2025 deorbits.
+    # --- Launch 2023-06-27, Soyuz-2.1b, Vostochny (SSO ~550 km, i≈97.5°) ---
+    SatelliteInfo(
+        norad_id=57180,
+        name="Монитор-3",
+        constellation="НИИЯФ МГУ",
+        purpose="Рентген/гамма-наблюдения вспышек",
+        mass_kg=4.0,
+        form_factor="3U",
+        launch_date="2023-06-27",
         status="active",
-        tle_line1="1 57198U 23091AK  26091.50000000  .00000290  00000-0  18000-4 0  9992",
-        tle_line2="2 57198  97.6100  30.0000 0015000 115.0000 200.0000 15.06000000 15001",
-        description="Кубсат МГТУ Баумана — измерение солнечной энергии, отражённой Землёй, и магнитного поля по трём осям.",
+        tle_line1="1 57180U 23091Q   26091.50000000  .00000350  00000-0  22000-4 0  9990",
+        tle_line2="2 57180  97.5100 182.0000 0010200 270.0000  90.0000 15.27000000 15600",
+        description="Кубсат НИИЯФ МГУ — продолжение миссии «Монитор-2», совместный мониторинг рентгеновских и гамма-вспышек. Позывной RS58S.",
+    ),
+    SatelliteInfo(
+        norad_id=57182,
+        name="Монитор-4",
+        constellation="НИИЯФ МГУ",
+        purpose="Рентген/гамма-наблюдения вспышек",
+        mass_kg=4.0,
+        form_factor="3U",
+        launch_date="2023-06-27",
+        status="active",
+        tle_line1="1 57182U 23091S   26091.50000000  .00000350  00000-0  22000-4 0  9991",
+        tle_line2="2 57182  97.5100 182.0000 0010200 271.0000  89.0000 15.27000000 15601",
+        description="Кубсат НИИЯФ МГУ — третий аппарат серии «Монитор» с детектором КОДИЗ. Позывной RS57S.",
+    ),
+    # --- Launch 2024-11-05, Soyuz-2.1b, Vostochny (SSO ~550 km, i≈97.3°) ---
+    SatelliteInfo(
+        norad_id=61772,
+        name="HyperView 1G",
+        constellation="SPUTNIX",
+        purpose="Гиперспектральная съёмка Земли",
+        mass_kg=8.0,
+        form_factor="6U",
+        launch_date="2024-11-05",
+        status="active",
+        tle_line1="1 61772U 24199AP  26091.50000000  .00000300  00000-0  18000-4 0  9990",
+        tle_line2="2 61772  97.3000 357.0000 0009200  98.0000 261.0000 15.65000000  6800",
+        description="Гиперспектральный кубсат 6U производства SPUTNIX — экспериментальная съёмка Земли в нескольких десятках спектральных полос. Позывной RS66S.",
     ),
     # --- Launch 2024-11-05, Soyuz-2.1b, Vostochny (SSO ~550 km, i≈97.6°) ---
     SatelliteInfo(

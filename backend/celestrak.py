@@ -27,10 +27,16 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-# Primary group endpoints (CelesTrak). When CelesTrak is reachable they
-# cover most CubeSats in one shot.
+# Primary group endpoints (CelesTrak).
+# `active` carries every operational spacecraft (~45k entries, ~1.7 MB) —
+# every Russian university CubeSat we ship with is in it. We previously
+# queried `cubesat` + `amateur`, but those groups miss most Russian
+# CubeSats (e.g. the entire 2024-11-05 Vostochny launch is in `active`
+# only) which is why production saw "2/15 LIVE": the per-NORAD fallback
+# requests then ate the 6 s wall-clock budget before they could fill
+# the gap. `amateur` is kept as a smaller secondary feed for redundancy.
 CELESTRAK_URLS = [
-    "https://celestrak.org/NORAD/elements/gp.php?GROUP=cubesat&FORMAT=tle",
+    "https://celestrak.org/NORAD/elements/gp.php?GROUP=active&FORMAT=tle",
     "https://celestrak.org/NORAD/elements/gp.php?GROUP=amateur&FORMAT=tle",
 ]
 
@@ -283,21 +289,23 @@ async def _run_celestrak_fetch(
 
     try:
         try:
-            # Single-pass parallel fetch: kick off group files AND a
-            # per-NORAD lookup for every requested satellite at the same
-            # time. Group results usually arrive first and populate most
-            # entries; per-NORAD fetches fill in anything the groups miss
-            # (Russian CubeSats often aren't in the "cubesat"/"amateur"
-            # CelesTrak groups, so the old "groups first, then individuals"
-            # pipeline doubled latency — every cold load paid both phases).
-            # Per-request timeout is bounded so a single slow CelesTrak
-            # response cannot hold the cache lock for tens of seconds.
+            # Two-phase parallel fetch:
+            #   1. Group endpoints (`active` is exhaustive for current
+            #      Russian CubeSats; `amateur` and the AMSAT mirror are
+            #      kept as cheap secondary feeds for redundancy).
+            #   2. Per-NORAD CATNR fallback ONLY for IDs that were still
+            #      missing after phase 1 — usually empty.
+            # Phase 1 alone covers our entire active catalog, so the
+            # 2024 "groups first, then 17 individuals" plan was wasted
+            # work that ate the wall-clock budget. Per-request timeout
+            # is bounded so a single slow CelesTrak response cannot
+            # hold the cache lock for tens of seconds.
             # connect=3s: when CelesTrak is blocked at the network edge
             # (common from RU networks), every connection attempt times
             # out; a 3 s budget makes the whole "tried, failed, falling
             # back to embedded" loop feel snappy instead of frozen.
-            timeout = httpx.Timeout(connect=3.0, read=10.0, write=5.0, pool=5.0)
-            limits = httpx.Limits(max_connections=32, max_keepalive_connections=16)
+            timeout = httpx.Timeout(connect=3.0, read=12.0, write=5.0, pool=5.0)
+            limits = httpx.Limits(max_connections=8, max_keepalive_connections=4)
             async with httpx.AsyncClient(
                 timeout=timeout,
                 http2=_HTTP2_AVAILABLE,
@@ -310,26 +318,24 @@ async def _run_celestrak_fetch(
                 tasks: list[asyncio.Task] = []
                 for url in CELESTRAK_URLS:
                     tasks.append(asyncio.create_task(_fetch_url(client, url)))
-                for nid in norad_ids:
-                    tasks.append(
-                        asyncio.create_task(
-                            _fetch_url(
-                                client,
-                                f"https://celestrak.org/NORAD/elements/gp.php?CATNR={nid}&FORMAT=tle",
-                            )
-                        )
-                    )
                 for url in MIRROR_URLS:
                     tasks.append(asyncio.create_task(_fetch_url(client, url)))
+                # Per-NORAD fallback ONLY for the entries the group files
+                # didn't return. Computed after the group fetches finish
+                # so we don't waste a request on every satellite when
+                # `active` already covers the whole catalog.
                 logger.info(
                     "TLE fetch: %d total requests in parallel (CelesTrak + mirrors)",
                     len(tasks),
                 )
-                # Hard wall-clock cap on the entire fetch — see
-                # FETCH_WALL_CLOCK_BUDGET_SEC for rationale.
+                fetch_started = time.monotonic()
+                # Phase 1 takes the larger slice so the cheap group
+                # feeds get a chance to land before we even consider
+                # per-NORAD fallback.
+                phase1_budget = FETCH_WALL_CLOCK_BUDGET_SEC * 0.7
                 done, pending = await asyncio.wait(
                     tasks,
-                    timeout=FETCH_WALL_CLOCK_BUDGET_SEC,
+                    timeout=phase1_budget,
                 )
                 cancelled = len(pending)
                 if pending:
@@ -343,6 +349,40 @@ async def _run_celestrak_fetch(
                         for nid, tle in parsed.items():
                             if nid in target_set:
                                 all_tle[nid] = tle
+                # Phase 2: cover any catalog entries the group feeds
+                # missed (e.g. fresh launches not yet propagated into
+                # CelesTrak's group files) with per-NORAD lookups.
+                # Empty in the typical case — the active group covers
+                # everything we ship.
+                missing = [nid for nid in norad_ids if nid not in all_tle]
+                phase2_budget = max(
+                    0.0,
+                    FETCH_WALL_CLOCK_BUDGET_SEC - (time.monotonic() - fetch_started),
+                )
+                if missing and phase2_budget > 0.5:
+                    phase2_tasks = [
+                        asyncio.create_task(
+                            _fetch_url(
+                                client,
+                                f"https://celestrak.org/NORAD/elements/gp.php?CATNR={nid}&FORMAT=tle",
+                            )
+                        )
+                        for nid in missing
+                    ]
+                    p2_done, p2_pending = await asyncio.wait(
+                        phase2_tasks,
+                        timeout=phase2_budget,
+                    )
+                    for fut in p2_pending:
+                        fut.cancel()
+                    cancelled += len(p2_pending)
+                    for fut in p2_done:
+                        parsed, kind = fut.result()
+                        outcomes[kind] = outcomes.get(kind, 0) + 1
+                        if parsed:
+                            for nid, tle in parsed.items():
+                                if nid in target_set:
+                                    all_tle[nid] = tle
                 # Any non-success outcome whose root cause was network
                 # (timeout / DNS / refused) means we should report
                 # `network_error` to the client even if a partial result

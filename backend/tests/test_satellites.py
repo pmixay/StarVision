@@ -4,18 +4,33 @@ from satellites import (
     RUSSIAN_CUBESATS,
     SatelliteInfo,
     get_all_satellites,
+    get_operational_satellites,
     get_satellite_by_id,
     get_tle_data,
 )
 
-EXPECTED_COUNT = 15
+# 15 operational + 3 archival (Yarilo-1 / CubeSX-HSE / Yarilo-3 all
+# de-orbited or no longer transmitting in 2025) = 18 catalog entries.
+EXPECTED_OPERATIONAL_COUNT = 15
+EXPECTED_ARCHIVAL_COUNT = 3
+EXPECTED_TOTAL_COUNT = EXPECTED_OPERATIONAL_COUNT + EXPECTED_ARCHIVAL_COUNT
+ARCHIVAL_NORAD_IDS = {46490, 47952, 57198}
 
 
 class TestSatelliteCatalog:
     """Catalog integrity checks."""
 
     def test_catalog_size(self):
-        assert len(RUSSIAN_CUBESATS) == EXPECTED_COUNT
+        assert len(RUSSIAN_CUBESATS) == EXPECTED_TOTAL_COUNT
+
+    def test_operational_size(self):
+        operational = [s for s in RUSSIAN_CUBESATS if s.status == "active"]
+        assert len(operational) == EXPECTED_OPERATIONAL_COUNT
+
+    def test_archival_size(self):
+        archival = [s for s in RUSSIAN_CUBESATS if s.status != "active"]
+        assert len(archival) == EXPECTED_ARCHIVAL_COUNT
+        assert {s.norad_id for s in archival} == ARCHIVAL_NORAD_IDS
 
     def test_all_entries_are_satellite_info(self):
         for sat in RUSSIAN_CUBESATS:
@@ -47,6 +62,20 @@ class TestSatelliteCatalog:
                 assert sat.tle_line1.startswith("1 "), f"{sat.name}: bad TLE line 1"
                 assert sat.tle_line2.startswith("2 "), f"{sat.name}: bad TLE line 2"
 
+    def test_archival_satellites_have_no_tle(self):
+        # Archival catalog entries must not carry a TLE — propagating a
+        # stale TLE for a re-entered spacecraft yields coordinates that
+        # look real but aren't.
+        for sat in RUSSIAN_CUBESATS:
+            if sat.status != "active":
+                assert sat.tle_line1 == ""
+                assert sat.tle_line2 == ""
+
+    def test_archival_satellites_have_archive_date(self):
+        for sat in RUSSIAN_CUBESATS:
+            if sat.status != "active":
+                assert sat.archive_date, f"{sat.name}: archive_date missing"
+
     def test_tle_line_lengths(self):
         for sat in RUSSIAN_CUBESATS:
             if sat.tle_line1:
@@ -57,24 +86,12 @@ class TestSatelliteCatalog:
                     len(sat.tle_line2) == 69
                 ), f"{sat.name}: TLE line 2 length = {len(sat.tle_line2)}"
 
-    def test_no_deorbited_satellites(self):
-        # Per project policy the catalog must not ship spacecraft that
-        # already re-entered the atmosphere — their TLEs are stale and
-        # downstream propagation would yield nonsense.
-        deorbited = [s for s in RUSSIAN_CUBESATS if s.status == "deorbited"]
-        assert deorbited == []
-
-    def test_all_satellites_active(self):
-        # Companion of the test above: the live catalog must be 100% active.
-        for sat in RUSSIAN_CUBESATS:
-            assert sat.status == "active"
-
 
 class TestGetAllSatellites:
     def test_returns_list_of_dicts(self):
         result = get_all_satellites()
         assert isinstance(result, list)
-        assert len(result) == EXPECTED_COUNT
+        assert len(result) == EXPECTED_TOTAL_COUNT
         for item in result:
             assert isinstance(item, dict)
             assert "norad_id" in item
@@ -102,9 +119,13 @@ class TestGetAllSatellites:
         items = get_all_satellites()
         for item in items:
             assert item["operational"] == (item["status"] == "active")
-        # All catalog entries must be operational.
         archival = [i for i in items if not i["operational"]]
-        assert archival == []
+        assert {i["norad_id"] for i in archival} == ARCHIVAL_NORAD_IDS
+
+    def test_archival_helper_excludes_them(self):
+        operational = get_operational_satellites()
+        for sat in operational:
+            assert sat.norad_id not in ARCHIVAL_NORAD_IDS
 
 
 class TestGetSatelliteById:
@@ -118,24 +139,40 @@ class TestGetSatelliteById:
         assert get_satellite_by_id(99999) is None
 
     def test_find_new_additions(self):
-        # Vizard-ion (replaces deorbited Geoscan-Edelveis on the Geoscan platform)
-        v = get_satellite_by_id(61749)
-        assert v is not None
-        assert v.constellation == "Геоскан"
-        assert v.status == "active"
+        # Replacements added when the 2025 deorbits forced a catalog rev.
+        for norad_id, expected_constellation in (
+            (57180, "НИИЯФ МГУ"),  # Monitor-3
+            (57182, "НИИЯФ МГУ"),  # Monitor-4
+            (61772, "SPUTNIX"),  # HyperView 1G
+        ):
+            v = get_satellite_by_id(norad_id)
+            assert v is not None, f"missing replacement {norad_id}"
+            assert v.status == "active"
+            assert v.constellation == expected_constellation
+
+    def test_archival_entries_present(self):
+        for norad_id in ARCHIVAL_NORAD_IDS:
+            sat = get_satellite_by_id(norad_id)
+            assert sat is not None
+            assert sat.status != "active"
 
 
 class TestGetTleData:
-    def test_returns_all_active(self):
+    def test_returns_all_operational(self):
         tle_list = get_tle_data()
-        assert len(tle_list) == EXPECTED_COUNT
+        assert len(tle_list) == EXPECTED_OPERATIONAL_COUNT
 
-    def test_active_satellites_present(self):
-        tle_list = get_tle_data()
-        norad_ids = [item["norad_id"] for item in tle_list]
+    def test_archival_satellites_excluded(self):
+        norad_ids = {item["norad_id"] for item in get_tle_data()}
+        for archival in ARCHIVAL_NORAD_IDS:
+            assert archival not in norad_ids
+
+    def test_operational_satellites_present(self):
+        norad_ids = {item["norad_id"] for item in get_tle_data()}
         assert 46493 in norad_ids  # Dekart
-        assert 46490 in norad_ids  # Yarilo-1
         assert 61749 in norad_ids  # Vizard-ion
+        assert 57180 in norad_ids  # Monitor-3 (replacement)
+        assert 61772 in norad_ids  # HyperView 1G (replacement)
 
     def test_tle_data_shape(self):
         tle_list = get_tle_data()

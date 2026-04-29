@@ -207,13 +207,14 @@ RESPONSE FORMAT — strictly JSON:
   ]
 }}
 
-Russian CubeSats in the system (NORAD ID):
+Russian CubeSats in the system (NORAD ID, 15 operational + 3 archival):
 - UniverSat program: Dekart (46493), NORBI (46494), NORBI-2 (57179), SamSat-Ionosphere (61784)
-- Bauman MSTU: Yarilo-1 (46490), UmKA-1 (57172), Yarilo-3 (57198)
-- SPUTNIX: CubeSX-HSE (47952), CubeSX-HSE-3 (57178)
+- Bauman MSTU: UmKA-1 (57172). Note: Yarilo-1 (46490) decayed 2025-03-07 and Yarilo-3 (57198) is no longer active — both are archival.
+- SPUTNIX: CubeSX-HSE-3 (57178), HyperView 1G (61772). Note: CubeSX-HSE (47952) decayed 2025-06-07 — archival.
 - Geoscan: Vizard-ion (61749)
-- SINP MSU: Monitor-2 (57184)
+- SINP MSU: Monitor-2 (57184), Monitor-3 (57180), Monitor-4 (57182)
 - Space-Pi: TUSUR GO (61782), RTU MIREA-1 (61785), Horizont (61757), ASRTU-1 (61781)
+Never use focus_satellite for archival NORAD IDs (46490, 47952, 57198) — they are de-orbited and the action will be rejected.
 
 {lang_instruction}
 Be friendly, informative, and passionate about space.
@@ -345,6 +346,16 @@ async def _ask_openrouter(
 ) -> dict[str, Any]:
     """Call OpenRouter (OpenAI-compatible). The system prompt goes as a
     system role message; assistant/user history is forwarded as-is.
+
+    Notes on `openai/gpt-oss-120b`:
+    * It's a reasoning model that consumes max_tokens for its chain of
+      thought. With a small budget it returns ``content=""`` because the
+      tokens were spent inside the reasoning trace. We bump the budget
+      and ask OpenRouter to *exclude* the reasoning trace from the
+      response (`reasoning.exclude=true`) so we get the answer text.
+    * The model ignores ``response_format: json_object`` (confirmed in
+      community reports), so we don't waste a server round-trip on it
+      and parse JSON out of the prose ourselves.
     """
     chosen_model = _get_openrouter_model(model)
     messages: list[dict[str, str]] = [
@@ -366,9 +377,13 @@ async def _ask_openrouter(
             json={
                 "model": chosen_model,
                 "messages": messages,
-                "max_tokens": 1024,
-                # Some OpenRouter providers honour this hint and skip prose.
-                "response_format": {"type": "json_object"},
+                # Reasoning models burn tokens on internal CoT before
+                # emitting `content`; 1024 was too tight to leave room
+                # for the actual answer.
+                "max_tokens": 4096,
+                # Exclude the reasoning trace from the response so what
+                # comes back in `content` is the user-facing answer.
+                "reasoning": {"exclude": True},
             },
         )
         response.raise_for_status()
@@ -379,8 +394,25 @@ async def _ask_openrouter(
     if choices:
         msg = choices[0].get("message") or {}
         text = msg.get("content") or ""
+        # Some OpenRouter providers split the answer between `content`
+        # and `reasoning_content` even when we ask to exclude reasoning.
+        # Fall back to the reasoning text so the user never gets an
+        # empty bubble — the JSON parser below tolerates either.
+        if not text.strip():
+            text = msg.get("reasoning_content") or msg.get("reasoning") or ""
+
     parsed = _parse_ai_response(text)
     if parsed is None:
+        if not text.strip():
+            text = (
+                "Sorry, the AI provider returned an empty answer. "
+                "Try re-asking — sometimes a slightly different wording "
+                "wakes the model up."
+                if lang == "en"
+                else "Извините, провайдер ИИ вернул пустой ответ. "
+                "Попробуй переспросить — иногда другая формулировка "
+                "помогает разговорить модель."
+            )
         return _wrap_response(text, [], lang=lang, source="openrouter")
     return _wrap_response(
         _response_message(parsed, text),
@@ -518,29 +550,31 @@ def _fallback_response(user_message: str, lang: str = "ru") -> dict[str, Any]:
         if any(w in msg_lower for w in ["ярило", "yarilo"]):
             return {
                 "message": (
-                    "Yarilo — a series of CubeSats by Bauman MSTU for solar physics research. "
-                    "Yarilo-1 (1.5U, NORAD 46490) and Yarilo-3 (3U, NORAD 57198) measure "
-                    "solar energy reflected by Earth and the magnetic field. Showing Yarilo-3."
+                    "Yarilo was a series of CubeSats by Bauman MSTU for solar physics research. "
+                    "Both Yarilo-1 (NORAD 46490, decayed 2025-03-07) and Yarilo-3 (NORAD 57198, "
+                    "no longer transmitting) are now archival. Today only UmKA-1 represents "
+                    "Bauman MSTU on the live scene — showing it."
                     if en
-                    else "Ярило — серия кубсатов МГТУ Баумана для исследования Солнца. "
-                    "Ярило-1 (1.5U, NORAD 46490) и Ярило-3 (3U, NORAD 57198) измеряют "
-                    "солнечную энергию и магнитное поле. Показываю Ярило-3."
+                    else "«Ярило» — серия кубсатов МГТУ Баумана для исследования Солнца. "
+                    "Ярило-1 (NORAD 46490) сошёл с орбиты 7 марта 2025 г., Ярило-3 (NORAD 57198) "
+                    "уже не выходит на связь — оба архивные. Из Баумановских аппаратов в "
+                    "live-сцене сейчас только УмКА-1, его и показываю."
                 ),
-                "actions": [{"type": "focus_satellite", "norad_id": 57198}],
+                "actions": [{"type": "focus_satellite", "norad_id": 57172}],
             }
         return {
             "message": (
-                "Bauman MSTU CubeSats in our model:\n"
-                "• UmKA-1 (3U, ~4 kg) — technology demonstrator, NORAD 57172\n"
-                "• Yarilo-1 (1.5U, ~2 kg) — solar research, NORAD 46490\n"
-                "• Yarilo-3 (3U, ~4 kg) — solar physics, magnetometry, NORAD 57198\n"
-                "Showing UmKA-1."
+                "Bauman MSTU spacecraft in the catalog:\n"
+                "• UmKA-1 (3U, ~4 kg) — technology demonstrator, NORAD 57172 — operational\n"
+                "• Yarilo-1 (NORAD 46490) — archival, decayed 2025-03-07\n"
+                "• Yarilo-3 (NORAD 57198) — archival, no longer transmitting\n"
+                "Showing UmKA-1 — the only live Bauman CubeSat."
                 if en
-                else "Кубсаты МГТУ Баумана в нашей модели:\n"
-                "• УмКА-1 (3U, ~4 кг) — технологический демонстратор, NORAD 57172\n"
-                "• Ярило-1 (1.5U, ~2 кг) — исследование Солнца, NORAD 46490\n"
-                "• Ярило-3 (3U, ~4 кг) — солнечная физика, магнитометрия, NORAD 57198\n"
-                "Показываю УмКА-1."
+                else "Аппараты МГТУ Баумана в каталоге:\n"
+                "• УмКА-1 (3U, ~4 кг) — технологический демонстратор, NORAD 57172 — действующий\n"
+                "• Ярило-1 (NORAD 46490) — архив, сошёл с орбиты 07.03.2025\n"
+                "• Ярило-3 (NORAD 57198) — архив, нет приёма с борта\n"
+                "Показываю УмКА-1 — единственный живой кубсат Баумана."
             ),
             "actions": [
                 {"type": "highlight_constellation", "name": "МГТУ Баумана"},
@@ -548,21 +582,37 @@ def _fallback_response(user_message: str, lang: str = "ru") -> dict[str, Any]:
             ],
         }
 
-    # ── SPUTNIX / CubeSX / HSE ───────────────────────────
-    if any(w in msg_lower for w in ["sputnix", "спутникс", "вшэ", "hse", "cubesx"]):
+    # ── SPUTNIX / CubeSX / HSE / HyperView ────────────────
+    if any(
+        w in msg_lower
+        for w in [
+            "sputnix",
+            "спутникс",
+            "вшэ",
+            "hse",
+            "cubesx",
+            "hyperview",
+            "хайпервью",
+            "гиперспектр",
+        ]
+    ):
         return {
             "message": (
-                "SPUTNIX 3U CubeSats in the model: CubeSX-HSE (NORAD 47952) and CubeSX-HSE-3 "
-                "(NORAD 57178), both with experimental Fresnel-lens cameras and X-band downlinks. "
-                "Showing CubeSX-HSE."
+                "SPUTNIX spacecraft in our model:\n"
+                "• CubeSX-HSE-3 (3U, NORAD 57178) — Fresnel-lens camera, X-band downlink\n"
+                "• HyperView 1G (6U, NORAD 61772) — hyperspectral Earth imager (RS66S)\n"
+                "Note: CubeSX-HSE (NORAD 47952) decayed 2025-06-07 — archival.\n"
+                "Showing CubeSX-HSE-3."
                 if en
-                else "Кубсаты SPUTNIX в модели: CubeSX-HSE (NORAD 47952) и CubeSX-HSE-3 (NORAD 57178) "
-                "с экспериментальными камерами на линзах Френеля и X-передатчиками. "
-                "Показываю CubeSX-HSE."
+                else "Кубсаты SPUTNIX в нашей модели:\n"
+                "• CubeSX-HSE-3 (3U, NORAD 57178) — камера на линзах Френеля и X-передатчик\n"
+                "• HyperView 1G (6U, NORAD 61772) — гиперспектральный аппарат ДЗЗ (позывной RS66S)\n"
+                "Примечание: CubeSX-HSE (NORAD 47952) сошёл с орбиты 07.06.2025 — архив.\n"
+                "Показываю CubeSX-HSE-3."
             ),
             "actions": [
                 {"type": "highlight_constellation", "name": "SPUTNIX"},
-                {"type": "focus_satellite", "norad_id": 47952},
+                {"type": "focus_satellite", "norad_id": 57178},
             ],
         }
 
@@ -587,14 +637,21 @@ def _fallback_response(user_message: str, lang: str = "ru") -> dict[str, Any]:
     if any(w in msg_lower for w in ["монитор", "ниияф", "monitor", "sinp", "кодиз", "kodiz"]):
         return {
             "message": (
-                "Monitor-2 is a 3U CubeSat by SINP MSU for X-ray and gamma-ray observations "
-                "of cosmic flares. KODIZ detector onboard. NORAD 57184, launched 2023-06-27. Showing."
+                "SINP MSU's Monitor-2/3/4 are a trio of 3U CubeSats for X-ray and gamma-ray "
+                "observations of cosmic flares. All three carry the KODIZ detector and were "
+                "launched together on 2023-06-27 (Soyuz-2.1b, Vostochny). NORAD 57184 / 57180 "
+                "/ 57182 — call signs RS39S, RS58S, RS57S. Showing Monitor-2 and highlighting "
+                "the SINP MSU group."
                 if en
-                else "Монитор-2 — кубсат 3U НИИЯФ МГУ для наблюдения космических вспышек "
-                "в рентгеновском и гамма-диапазоне. Детектор КОДИЗ на борту. "
-                "NORAD 57184, запущен 2023-06-27. Показываю."
+                else "Монитор-2/3/4 — трио кубсатов 3U НИИЯФ МГУ для наблюдения космических "
+                "вспышек в рентгеновском и гамма-диапазоне. У всех на борту детектор КОДИЗ; "
+                "запущены 27.06.2023 (Союз-2.1б, Восточный). NORAD 57184 / 57180 / 57182 — "
+                "позывные RS39S, RS58S, RS57S. Показываю «Монитор-2» и группу НИИЯФ МГУ."
             ),
-            "actions": [{"type": "focus_satellite", "norad_id": 57184}],
+            "actions": [
+                {"type": "highlight_constellation", "name": "НИИЯФ МГУ"},
+                {"type": "focus_satellite", "norad_id": 57184},
+            ],
         }
 
     # ── Space-Pi ─────────────────────────────────────────
@@ -923,7 +980,10 @@ def _fallback_response(user_message: str, lang: str = "ru") -> dict[str, Any]:
         for w in ["покаж", "найди", "где ", "фокус", "show", "find", "where", "focus"]
     ):
         sat_map = {
-            # Real satellites in our system (correct NORAD IDs)
+            # Operational satellites in our 15-craft active catalog.
+            # Archival NORAD IDs (46490 Yarilo-1, 47952 CubeSX-HSE, 57198
+            # Yarilo-3) intentionally aren't here — focus_satellite would
+            # be rejected by the validator anyway.
             "декарт": 46493,
             "dekart": 46493,
             "норби-2": 57179,
@@ -931,25 +991,26 @@ def _fallback_response(user_message: str, lang: str = "ru") -> dict[str, Any]:
             "норби2": 57179,
             "норби": 46494,
             "norbi": 46494,
-            "ярило-1": 46490,
-            "yarilo-1": 46490,
-            "ярило1": 46490,
-            "ярило-3": 57198,
-            "yarilo-3": 57198,
-            "ярило3": 57198,
-            "ярило": 57198,
-            "yarilo": 57198,
             "умка": 57172,
             "umka": 57172,
             "умка-1": 57172,
             "cubesx-hse-3": 57178,
             "cubesx-3": 57178,
-            "cubesx-hse": 47952,
-            "cubesx": 47952,
+            "cubesx": 57178,
+            "hyperview": 61772,
+            "хайпервью": 61772,
+            "гиперспектр": 61772,
             "vizard-ion": 61749,
             "визард-ион": 61749,
             "vizard ion": 61749,
             "vizard": 61749,
+            "визард": 61749,
+            "монитор-2": 57184,
+            "monitor-2": 57184,
+            "монитор-3": 57180,
+            "monitor-3": 57180,
+            "монитор-4": 57182,
+            "monitor-4": 57182,
             "монитор": 57184,
             "monitor": 57184,
             "самсат": 61784,
