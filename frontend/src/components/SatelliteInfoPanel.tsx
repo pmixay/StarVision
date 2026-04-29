@@ -3,10 +3,8 @@ import { useStore } from '../hooks/useStore';
 import { t, tConstellation } from '../i18n';
 import { getSimTime } from '../simClock';
 import { CONSTELLATION_NAMES } from '../constants';
+import { computeVirtualECI, EARTH_RADIUS_KM, EARTH_MU_KM3_S2 } from '../lib/orbital';
 import type { SatelliteData, SatellitePosition } from '../types';
-
-const EARTH_RADIUS = 6371.0;
-const MU = 398600.4418;
 
 interface SatelliteInfoPanelProps {
   satellites: SatelliteData[];
@@ -68,31 +66,11 @@ export function SatelliteInfoPanel({ satellites, positions }: SatelliteInfoPanel
     const intervalMs = Math.max(50, BASE_INTERVAL_MS / Math.max(1, timeSpeedRef.current));
     const interval = setInterval(() => {
       const idx = selectedSatellite - 90000;
-      const a = EARTH_RADIUS + orbitAltitudeKm;
-      const n = Math.sqrt(MU / (a * a * a));
-      const incl = (55 * Math.PI) / 180;
-      const P = Math.max(1, Math.min(orbitalPlanes, satelliteCount));
-      const satsPerPlane = Math.ceil(satelliteCount / P);
-      const planeIdx = idx % P;
-      const satInPlane = Math.floor(idx / P);
-      const raan = (planeIdx / P) * 2 * Math.PI;
-      const F = P > 1 ? Math.max(1, Math.floor(P / 2)) : 0;
-      const phase = (satInPlane / satsPerPlane) * 2 * Math.PI
-        + (F * planeIdx / P) * (2 * Math.PI / satsPerPlane);
+      const a = EARTH_RADIUS_KM + orbitAltitudeKm;
       const simTimeSec = getSimTime() / 1000;
-      const M = n * simTimeSec + phase;
-      const xOrb = a * Math.cos(M);
-      const yOrb = a * Math.sin(M);
-      const xInc = xOrb;
-      const yInc = yOrb * Math.cos(incl);
-      const zInc = yOrb * Math.sin(incl);
-      const cosR = Math.cos(raan);
-      const sinR = Math.sin(raan);
-      const x = xInc * cosR - yInc * sinR;
-      const y = xInc * sinR + yInc * cosR;
-      const z = zInc;
-      const speed = Math.sqrt(MU / a);
-      const periodMin = (2 * Math.PI * Math.sqrt(a * a * a / MU)) / 60;
+      const { x, y, z } = computeVirtualECI(idx, satelliteCount, orbitAltitudeKm, simTimeSec, orbitalPlanes);
+      const speed = Math.sqrt(EARTH_MU_KM3_S2 / a);
+      const periodMin = (2 * Math.PI * Math.sqrt((a * a * a) / EARTH_MU_KM3_S2)) / 60;
       const r = Math.sqrt(x * x + y * y + z * z);
       const lat = Math.asin(z / r) * (180 / Math.PI);
       const lon = Math.atan2(y, x) * (180 / Math.PI);
@@ -123,7 +101,7 @@ export function SatelliteInfoPanel({ satellites, positions }: SatelliteInfoPanel
 
   return (
     <div
-      className="glass-panel absolute top-16 right-4 w-80 p-4 animate-slide-right z-10"
+      className="glass-panel absolute top-16 right-4 w-80 max-w-[92vw] p-4 animate-slide-right z-10"
       style={{ maxHeight: 'calc(100vh - 120px)', overflowY: 'auto' }}
     >
       {/* Header */}

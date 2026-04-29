@@ -57,6 +57,10 @@ export const translations = {
     ru: 'CelesTrak недоступен — показываю встроенные TLE',
     en: 'CelesTrak unavailable — showing embedded TLE',
   },
+  'control.tleFallbackDetail': {
+    ru: 'CelesTrak недоступен; показаны встроенные TLE. Перепроверьте сеть.',
+    en: 'CelesTrak unavailable; showing embedded TLE. Check your network.',
+  },
   'control.tleAgeSec': { ru: '{sec} сек назад', en: '{sec} sec ago' },
   'control.tleAgeMin': { ru: '{min} мин назад', en: '{min} min ago' },
   'control.tleNeverFetched': { ru: 'нет запроса к CelesTrak', en: 'no CelesTrak fetch yet' },
@@ -107,6 +111,9 @@ export const translations = {
     en: 'Ask about satellites or control the visualization.',
   },
   'chat.placeholder': { ru: 'Спроси StarAI...', en: 'Ask StarAI...' },
+  'chat.open': { ru: 'Открыть чат StarAI', en: 'Open StarAI chat' },
+  'chat.close': { ru: 'Закрыть чат', en: 'Close chat' },
+  'chat.send': { ru: 'Отправить сообщение', en: 'Send message' },
   'chat.error': {
     ru: 'Ошибка связи с сервером. Попробуйте позже.',
     en: 'Server connection error. Please try again later.',

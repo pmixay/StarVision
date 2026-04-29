@@ -15,11 +15,10 @@ import { twoline2satrec, propagate } from 'satellite.js';
 import { getSimTime, advanceSimTime } from '../simClock';
 import { CONSTELLATION_COLORS, CONSTELLATION_NAMES, CONSTELLATION_MODEL_TYPE } from '../constants';
 import { selectRealSatellites } from '../selection';
+import { circularOrbitPeriodSec, computeVirtualECI, SCENE_SCALE } from '../lib/orbital';
 import type { SatellitePosition, OrbitPoint, TLEData } from '../types';
 
-const EARTH_RADIUS = 6371.0;
-const MU = 398600.4418;
-const SCALE = 1 / EARTH_RADIUS;
+const SCALE = SCENE_SCALE;
 
 function getColor(constellation: string): string {
   return CONSTELLATION_COLORS[constellation] || '#8ec9ff';
@@ -27,44 +26,6 @@ function getColor(constellation: string): string {
 
 function getModelType(constellation: string): number {
   return CONSTELLATION_MODEL_TYPE[constellation] ?? 0;
-}
-
-// ── Virtual circular orbits ────────────────────────────────────────
-function computeCircularOrbitECI(
-  index: number,
-  total: number,
-  altitudeKm: number,
-  simTimeSec: number,
-  planes: number = 1
-): { x: number; y: number; z: number } {
-  const a = EARTH_RADIUS + altitudeKm;
-  const n = Math.sqrt(MU / (a * a * a)); // rad/s
-  const incl = (55 * Math.PI) / 180;
-  const P = Math.max(1, Math.min(planes, total));
-  const satsPerPlane = Math.ceil(total / P);
-  const planeIdx = index % P;
-  const satInPlane = Math.floor(index / P);
-  const raan = (planeIdx / P) * 2 * Math.PI;
-  // Walker-δ T/P/F: inter-plane phase offset for uniform coverage
-  const F = P > 1 ? Math.max(1, Math.floor(P / 2)) : 0;
-  const phase = (satInPlane / satsPerPlane) * 2 * Math.PI
-    + (F * planeIdx / P) * (2 * Math.PI / satsPerPlane);
-  const M = n * simTimeSec + phase;
-
-  const xOrb = a * Math.cos(M);
-  const yOrb = a * Math.sin(M);
-
-  const xInc = xOrb;
-  const yInc = yOrb * Math.cos(incl);
-  const zInc = yOrb * Math.sin(incl);
-
-  const cosR = Math.cos(raan);
-  const sinR = Math.sin(raan);
-  return {
-    x: xInc * cosR - yInc * sinR,
-    y: xInc * sinR + yInc * cosR,
-    z: zInc,
-  };
 }
 
 // ── 3D model: 1U CubeSat (10×10×10 cm, 2 small panels) ────────────
@@ -325,33 +286,10 @@ function VirtualOrbitLine({
   const positions = useMemo(() => {
     const steps = 128;
     const arr = new Float32Array(steps * 3);
-    const a = EARTH_RADIUS + altitudeKm;
-    const n = Math.sqrt(MU / (a * a * a));
-    const incl = (55 * Math.PI) / 180;
-    const P = Math.max(1, Math.min(planes, total));
-    const satsPerPlane = Math.ceil(total / P);
-    const planeIdx = index % P;
-    const satInPlane = Math.floor(index / P);
-    const raan = (planeIdx / P) * 2 * Math.PI;
-    // Walker-δ T/P/F: inter-plane phase offset
-    const F = P > 1 ? Math.max(1, Math.floor(P / 2)) : 0;
-    const phase = (satInPlane / satsPerPlane) * 2 * Math.PI
-      + (F * planeIdx / P) * (2 * Math.PI / satsPerPlane);
-    const period = (2 * Math.PI) / n;
-
+    const period = circularOrbitPeriodSec(altitudeKm);
     for (let i = 0; i < steps; i++) {
       const t = (i / steps) * period;
-      const M = n * t + phase;
-      const xOrb = a * Math.cos(M);
-      const yOrb = a * Math.sin(M);
-      const xInc = xOrb;
-      const yInc = yOrb * Math.cos(incl);
-      const zInc = yOrb * Math.sin(incl);
-      const cosR = Math.cos(raan);
-      const sinR = Math.sin(raan);
-      const x = xInc * cosR - yInc * sinR;
-      const y = xInc * sinR + yInc * cosR;
-      const z = zInc;
+      const { x, y, z } = computeVirtualECI(index, total, altitudeKm, t, planes);
       arr[i * 3] = x * SCALE;
       arr[i * 3 + 1] = z * SCALE;
       arr[i * 3 + 2] = -y * SCALE;
@@ -471,7 +409,7 @@ export function Satellites({
         // Virtual mode
         if (alt > 0) {
           const idx = noradId - 90000;
-          return computeCircularOrbitECI(idx, vsc, alt, simTime / 1000, planes);
+          return computeVirtualECI(idx, vsc, alt, simTime / 1000, planes);
         }
         // Real TLE mode via satellite.js
         const satrec = satrecsRef.current.get(noradId);
@@ -489,7 +427,7 @@ export function Satellites({
     const simTime = getSimTime();
     if (orbitAltitudeKm > 0) {
       const idx = noradId - 90000;
-      const eci = computeCircularOrbitECI(idx, Math.max(virtualSatCount, 1), orbitAltitudeKm, simTime / 1000, orbitalPlanes);
+      const eci = computeVirtualECI(idx, Math.max(virtualSatCount, 1), orbitAltitudeKm, simTime / 1000, orbitalPlanes);
       return new Vector3(eci.x * SCALE, eci.z * SCALE, -eci.y * SCALE);
     }
     const p = positions.find((pos) => pos.norad_id === noradId);

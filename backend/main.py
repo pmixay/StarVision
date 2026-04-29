@@ -6,14 +6,17 @@ Digital twin of a Russian CubeSat constellation.
 import logging
 import math
 import os
-from datetime import datetime, timezone
+import time
+from collections import deque
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import List, Optional
+from threading import Lock
+from typing import Deque, Dict, List, Optional
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, Query, HTTPException
+from fastapi import FastAPI, Query, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 load_dotenv(Path(__file__).resolve().with_name(".env"))
 
@@ -31,10 +34,17 @@ from celestrak import (
 )
 
 # ── Application ─────────────────────────────────────────────────────
-ALLOWED_ORIGINS = os.getenv(
-    "CORS_ORIGINS",
-    "http://localhost:3000,http://localhost:5173,http://78.17.40.155",
-).split(",")
+# Default to local dev origins only. Production hosts MUST be configured
+# explicitly via the CORS_ORIGINS env var; we never ship a public IP in
+# the codebase because rotating it would require a code change and any
+# accidental DNS hijack toward that address could exfiltrate cookies
+# (allow_credentials=True below).
+_DEFAULT_CORS_ORIGINS = "http://localhost:3000,http://localhost:5173"
+ALLOWED_ORIGINS = [
+    o.strip()
+    for o in os.getenv("CORS_ORIGINS", _DEFAULT_CORS_ORIGINS).split(",")
+    if o.strip()
+]
 
 app = FastAPI(
     title="StarVision API",
@@ -70,15 +80,92 @@ async def _warm_celestrak_cache() -> None:
 
 
 # ── Request models ──────────────────────────────────────────────────
+# Hard caps protect the LLM-backed /api/starai/chat endpoint from
+# accidental or malicious oversize payloads. Without these limits a
+# single client could pump multi-megabyte messages, drive up provider
+# bills and stall workers; Pydantic rejects the request before it
+# reaches the AI layer.
+MAX_CHAT_MESSAGE_LEN = 4000
+MAX_CHAT_CONTENT_LEN = 4000
+MAX_CHAT_HISTORY_ITEMS = 30
+
+
 class ChatMessage(BaseModel):
-    role: str       # "user" | "assistant"
-    content: str
+    role: str = Field(..., pattern="^(user|assistant)$")
+    content: str = Field(..., min_length=1, max_length=MAX_CHAT_CONTENT_LEN)
 
 
 class ChatRequest(BaseModel):
-    message: str
-    history: List[ChatMessage] = []
-    lang: str = "ru"
+    message: str = Field(..., min_length=1, max_length=MAX_CHAT_MESSAGE_LEN)
+    history: List[ChatMessage] = Field(default_factory=list, max_length=MAX_CHAT_HISTORY_ITEMS)
+    lang: str = Field(default="ru", pattern="^(ru|en)$")
+
+
+# ── Rate limiter (in-memory, per-IP, fixed window) ─────────────────
+# Lightweight defence so a single client cannot fan-out chat requests
+# faster than humans do. The bound is intentionally generous; abusive
+# bursts hit the AI provider's own rate limits anyway. Implemented in
+# stdlib to avoid pulling another dep just for one endpoint.
+CHAT_RATE_LIMIT_PER_MIN = int(os.getenv("CHAT_RATE_LIMIT_PER_MIN", "20"))
+CHAT_RATE_WINDOW_SEC = 60.0
+_chat_rate_buckets: Dict[str, Deque[float]] = {}
+_chat_rate_lock = Lock()
+
+
+def _client_ip(req: Request) -> str:
+    """Best-effort client identifier. Trusts X-Forwarded-For only when a
+    reverse proxy is explicitly declared, otherwise the socket peer is
+    the safest default."""
+    if os.getenv("TRUST_FORWARDED_FOR") == "1":
+        fwd = req.headers.get("x-forwarded-for")
+        if fwd:
+            return fwd.split(",")[0].strip()
+    if req.client and req.client.host:
+        return req.client.host
+    return "unknown"
+
+
+def _check_chat_rate_limit(req: Request) -> None:
+    if CHAT_RATE_LIMIT_PER_MIN <= 0:
+        return
+    ip = _client_ip(req)
+    now = time.monotonic()
+    with _chat_rate_lock:
+        bucket = _chat_rate_buckets.setdefault(ip, deque())
+        cutoff = now - CHAT_RATE_WINDOW_SEC
+        while bucket and bucket[0] < cutoff:
+            bucket.popleft()
+        if len(bucket) >= CHAT_RATE_LIMIT_PER_MIN:
+            retry_after = max(1, int(CHAT_RATE_WINDOW_SEC - (now - bucket[0])))
+            raise HTTPException(
+                status_code=429,
+                detail="rate_limited",
+                headers={"Retry-After": str(retry_after)},
+            )
+        bucket.append(now)
+
+
+# ── Timestamp parsing with sanity bounds ───────────────────────────
+# SGP4 happily propagates centuries away from the TLE epoch but the
+# results are physically meaningless and the computation is unbounded.
+# Reject anything farther than ±1 year from now so a client request
+# cannot turn into a CPU-bound denial of service.
+_TIMESTAMP_MAX_DELTA = timedelta(days=365)
+
+
+def _parse_timestamp(value: Optional[str]) -> Optional[datetime]:
+    if not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid timestamp format") from exc
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    now = datetime.now(timezone.utc)
+    if abs(dt - now) > _TIMESTAMP_MAX_DELTA:
+        raise HTTPException(status_code=400, detail="timestamp out of supported range (±1 year)")
+    return dt
 
 
 # ── Helper: TLE override ──────────────────────────────────────────
@@ -126,12 +213,28 @@ async def _get_tle_override(source: str) -> tuple:
 
 
 # ── Helper: operational filter on propagate_all output ─────────────
+# RUSSIAN_CUBESATS is module-level immutable, so the operational set is
+# stable for the lifetime of the process; rebuilding it on every
+# /positions and /links call (60+ times per minute under polling) wastes
+# work for no reason.
+_OPERATIONAL_NORADS_CACHE: Optional[set] = None
+
+
+def _operational_norads() -> set:
+    global _OPERATIONAL_NORADS_CACHE
+    if _OPERATIONAL_NORADS_CACHE is None:
+        _OPERATIONAL_NORADS_CACHE = {
+            s["norad_id"] for s in get_all_satellites() if s["operational"]
+        }
+    return _OPERATIONAL_NORADS_CACHE
+
+
 def _filter_operational(positions: list) -> list:
     """Guard against any archival satellite slipping into the position
     stream. propagate_all already filters, but we double-check here so
     an upstream regression cannot silently leak stale orbits.
     """
-    allowed = {s["norad_id"] for s in get_all_satellites() if s["operational"]}
+    allowed = _operational_norads()
     return [p for p in positions if p["norad_id"] in allowed]
 
 
@@ -259,12 +362,7 @@ async def get_positions(
     ?timestamp=2026-03-29T12:00:00Z — for a specific moment.
     ?source=embedded|celestrak — TLE data source.
     """
-    dt = None
-    if timestamp:
-        try:
-            dt = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail="Invalid timestamp format") from exc
+    dt = _parse_timestamp(timestamp)
     tle_override, meta = await _get_tle_override(source)
     positions = _filter_operational(propagate_all(dt, tle_override=tle_override))
     return {
@@ -375,13 +473,7 @@ async def get_links(
     ?timestamp=... — calculation time (defaults to current UTC)
     ?source=embedded|celestrak — TLE data source.
     """
-    dt = None
-    if timestamp:
-        try:
-            dt = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail="Invalid timestamp format") from exc
-
+    dt = _parse_timestamp(timestamp)
     tle_override, meta = await _get_tle_override(source)
     positions = _filter_operational(propagate_all(dt, tle_override=tle_override))
 
@@ -477,8 +569,9 @@ async def get_optimized_planes(
 
 # ── Endpoint: StarAI ────────────────────────────────────────────────
 @app.post("/api/starai/chat")
-async def starai_chat(req: ChatRequest):
+async def starai_chat(req: ChatRequest, request: Request):
     """Chat with StarAI — response + UI commands."""
+    _check_chat_rate_limit(request)
     history = [{"role": m.role, "content": m.content} for m in req.history]
     result = await ask_starai(
         req.message,

@@ -13,6 +13,7 @@ from celestrak import (
     ERR_TIMEOUT, ERR_NETWORK, ERR_UPSTREAM, ERR_EMPTY,
     get_tle_by_source, _classify_network_error, invalidate_cache,
 )
+from satellites import RUSSIAN_CUBESATS, is_operational
 
 
 SAFE_CODES = {ERR_TIMEOUT, ERR_NETWORK, ERR_UPSTREAM, ERR_EMPTY}
@@ -73,6 +74,22 @@ async def test_get_tle_embedded_has_no_error_surface():
     meta = payload["meta"]
     # Embedded path never touches CelesTrak and must have no error
     assert meta["error"] is None
+
+
+@pytest.mark.asyncio
+async def test_partial_celestrak_uses_contract_source_name():
+    live_sat = next(s for s in RUSSIAN_CUBESATS if is_operational(s.status))
+
+    async def _partial_live(*_args, **_kwargs):
+        return {live_sat.norad_id: (live_sat.tle_line1, live_sat.tle_line2)}
+
+    with patch.object(celestrak, "fetch_celestrak_tle", _partial_live):
+        payload = await get_tle_by_source("celestrak")
+
+    meta = payload["meta"]
+    assert meta["effective_source"] == "celestrak_partial"
+    assert meta["live_count"] == 1
+    assert meta["fallback_count"] == meta["total"] - 1
 
 
 @pytest.mark.asyncio

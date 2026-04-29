@@ -53,9 +53,7 @@ export function ControlPanel() {
       pushToast({
         level: 'warning',
         title: t('event.tleFallback', lang),
-        detail: lang === 'ru'
-          ? 'CelesTrak недоступен; показаны встроенные TLE. Перепроверьте сеть.'
-          : 'CelesTrak unavailable; showing embedded TLE. Check your network.',
+        detail: t('control.tleFallbackDetail', lang),
       });
       logEvent({ level: 'warning', kind: 'tle_fallback', message: t('event.tleFallback', lang) });
     } else if (eff === 'celestrak_partial') {
@@ -137,7 +135,7 @@ export function ControlPanel() {
 
   return (
     <div
-      className="glass-panel absolute top-4 left-4 w-72 p-4 animate-slide-left z-10 overflow-y-auto overflow-x-hidden"
+      className="glass-panel absolute top-4 left-4 w-72 max-w-[92vw] p-4 animate-slide-left z-10 overflow-y-auto overflow-x-hidden"
       style={{ animationDelay: '0.2s', animationFillMode: 'both', maxHeight: 'calc(100vh - 80px)' }}
     >
       {/* Title */}

@@ -20,51 +20,23 @@ import { getSimTime } from '../simClock';
 import { useStore } from '../hooks/useStore';
 import { CONSTELLATION_NAMES } from '../constants';
 import { selectRealSatellites } from '../selection';
+import { computeVirtualECI, EARTH_RADIUS_KM, SCENE_SCALE } from '../lib/orbital';
 import type { TLEData } from '../types';
 
-const EARTH_RADIUS = 6371.0;
-const MU = 398600.4418;
-const SCALE = 1 / EARTH_RADIUS;
-const EARTH_RADIUS_SQ = EARTH_RADIUS * EARTH_RADIUS;
+const SCALE = SCENE_SCALE;
+const EARTH_RADIUS_SQ = EARTH_RADIUS_KM * EARTH_RADIUS_KM;
 
-// Virtual orbit positions
+// Per-frame helper: bulk-evaluate the shared virtual orbit generator.
 function computeVirtualPositions(
   count: number,
   altitudeKm: number,
   simTimeMs: number,
-  planes: number
+  planes: number,
 ): Array<{ x: number; y: number; z: number }> {
-  const a = EARTH_RADIUS + altitudeKm;
-  const n = Math.sqrt(MU / (a * a * a));
-  const incl = (55 * Math.PI) / 180;
-  const cosIncl = Math.cos(incl);
-  const sinIncl = Math.sin(incl);
   const t = simTimeMs / 1000;
-  const P = Math.max(1, Math.min(planes, count));
-  const satsPerPlane = Math.ceil(count / P);
-  const twoPi = 2 * Math.PI;
-  // Walker-δ T/P/F: inter-plane phase offset for uniform coverage
-  const F = P > 1 ? Math.max(1, Math.floor(P / 2)) : 0;
-
   const result: Array<{ x: number; y: number; z: number }> = new Array(count);
   for (let i = 0; i < count; i++) {
-    const planeIdx = i % P;
-    const satInPlane = Math.floor(i / P);
-    const raan = (planeIdx / P) * twoPi;
-    const phase = (satInPlane / satsPerPlane) * twoPi
-      + (F * planeIdx / P) * (twoPi / satsPerPlane);
-    const M = n * t + phase;
-    const xOrb = a * Math.cos(M);
-    const yOrb = a * Math.sin(M);
-    const yInc = yOrb * cosIncl;
-    const zInc = yOrb * sinIncl;
-    const cosR = Math.cos(raan);
-    const sinR = Math.sin(raan);
-    result[i] = {
-      x: xOrb * cosR - yInc * sinR,
-      y: xOrb * sinR + yInc * cosR,
-      z: zInc,
-    };
+    result[i] = computeVirtualECI(i, count, altitudeKm, t, planes);
   }
   return result;
 }
@@ -142,13 +114,26 @@ export function InterSatelliteLinks({ tleData, satelliteConstellations }: InterS
   const frameCountRef = useRef(0);
   const activeLineCountRef = useRef(0);
 
-  // Init line pool
+  // Init line pool. We dispose geometries on unmount because Three.js
+  // does not release GPU buffers automatically; switching TLE source or
+  // hot-reloading the component otherwise leaks ~120 BufferGeometry
+  // objects per remount. Materials are module-level singletons, so we
+  // intentionally leave them alive.
   useEffect(() => {
     if (!groupRef.current || poolInitializedRef.current) return;
+    const group = groupRef.current;
     const pool = createLinePool();
-    pool.forEach((line) => groupRef.current!.add(line));
+    pool.forEach((line) => group.add(line));
     linePoolRef.current = pool;
     poolInitializedRef.current = true;
+    return () => {
+      for (const line of pool) {
+        group.remove(line);
+        line.geometry.dispose();
+      }
+      linePoolRef.current = [];
+      poolInitializedRef.current = false;
+    };
   }, []);
 
   // Pointer tracking with passive listener

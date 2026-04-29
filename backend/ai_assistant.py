@@ -25,9 +25,26 @@ load_dotenv(Path(__file__).resolve().with_name(".env"))
 # out-of-range speeds, or undefined action types. We clamp / drop here
 # so the client never has to defend against malformed AI output.
 
-_OPERATIONAL_NORADS = {s.norad_id for s in RUSSIAN_CUBESATS if is_operational(s.status)}
-_ALL_NORADS = {s.norad_id for s in RUSSIAN_CUBESATS}
-_KNOWN_CONSTELLATIONS = {s.constellation for s in RUSSIAN_CUBESATS}
+# Cap how many UI actions the model can issue per response. A single
+# turn that flips dozens of toggles in a row is almost always a runaway
+# generation, not a useful command — so we keep the surface predictable
+# for the user.
+MAX_ACTIONS_PER_RESPONSE = 8
+
+
+def _operational_norads() -> set:
+    """Build the operational-NORAD set lazily from the live catalog so
+    edits to satellites.py (status flips, new launches) are picked up
+    without bumping a parallel module-level constant."""
+    return {s.norad_id for s in RUSSIAN_CUBESATS if is_operational(s.status)}
+
+
+def _all_norads() -> set:
+    return {s.norad_id for s in RUSSIAN_CUBESATS}
+
+
+def _known_constellations() -> set:
+    return {s.constellation for s in RUSSIAN_CUBESATS}
 
 
 def _clamp(value: float, lo: float, hi: float) -> float:
@@ -48,9 +65,9 @@ def _validate_action(action: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], 
         nid = action.get("norad_id")
         if not isinstance(nid, int):
             return None, "focus_satellite.norad_id must be an integer"
-        if nid not in _ALL_NORADS:
+        if nid not in _all_norads():
             return None, f"focus_satellite: unknown NORAD {nid}"
-        if nid not in _OPERATIONAL_NORADS:
+        if nid not in _operational_norads():
             # Archival satellites cannot be tracked live.
             return None, f"focus_satellite: NORAD {nid} is archival (not operational)"
         return {"type": "focus_satellite", "norad_id": nid}, None
@@ -71,7 +88,7 @@ def _validate_action(action: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], 
         name = action.get("name")
         if not isinstance(name, str):
             return None, "highlight_constellation.name must be string"
-        if name not in _KNOWN_CONSTELLATIONS:
+        if name not in _known_constellations():
             return None, f"highlight_constellation: unknown group '{name}'"
         return {"type": "highlight_constellation", "name": name}, None
 
@@ -113,15 +130,15 @@ def validate_actions(actions: List[Any]) -> Tuple[List[Dict[str, Any]], List[str
         return [], ["actions must be a list"]
     accepted: List[Dict[str, Any]] = []
     rejected: List[str] = []
-    # Cap at 8 actions per response to keep the UI predictable.
-    for action in actions[:8]:
+    for action in actions[:MAX_ACTIONS_PER_RESPONSE]:
         validated, err = _validate_action(action)
         if validated is not None:
             accepted.append(validated)
         elif err:
             rejected.append(err)
-    if len(actions) > 8:
-        rejected.append(f"dropped {len(actions) - 8} trailing actions (cap=8)")
+    overflow = len(actions) - MAX_ACTIONS_PER_RESPONSE
+    if overflow > 0:
+        rejected.append(f"dropped {overflow} trailing actions (cap={MAX_ACTIONS_PER_RESPONSE})")
     return accepted, rejected
 
 # Anthropic API (via HTTP, no SDK — for simplicity)
@@ -131,7 +148,7 @@ ANTHROPIC_DEFAULT_MODEL = "claude-sonnet-4-20250514"
 # OpenRouter — OpenAI-compatible gateway. The key is stored server-side in
 # backend/.env so the browser never receives or forwards it.
 OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
-OPENROUTER_DEFAULT_MODEL = "openai/gpt-4o-mini"
+OPENROUTER_MODEL = "openai/gpt-oss-120b"
 
 
 def _env(name: str) -> str:
@@ -150,9 +167,13 @@ def _get_openrouter_api_key() -> str:
     return _env("OPENROUTER_API_KEY")
 
 
-def _get_openrouter_model(model: Optional[str] = None) -> str:
-    default_model = _env("OPENROUTER_DEFAULT_MODEL") or OPENROUTER_DEFAULT_MODEL
-    return (model or default_model).strip() or default_model
+def _get_openrouter_model(_model: Optional[str] = None) -> str:
+    """Return the fixed OpenRouter model.
+
+    `_model` is intentionally ignored: StarAI must not be switched to a
+    different provider model via client input or environment overrides.
+    """
+    return OPENROUTER_MODEL
 
 SYSTEM_PROMPT_BASE = """You are StarAI, the intelligent assistant of the StarVision project.
 StarVision is a digital twin of a constellation of Russian cubesats and small spacecraft.
@@ -214,26 +235,64 @@ def _build_system_prompt(lang: str = "ru") -> str:
     return SYSTEM_PROMPT_BASE.format(lang_instruction=instruction)
 
 
+_JSON_DECODER = json.JSONDecoder()
+
+
+def _is_ai_response_object(obj: Any) -> bool:
+    if not isinstance(obj, dict):
+        return False
+    return isinstance(obj.get("message"), str) or isinstance(obj.get("actions"), list)
+
+
+def _scan_first_ai_response_object(text: str) -> Optional[Dict[str, Any]]:
+    """Walk the string, asking the JSON decoder to consume an object at
+    each '{' until one parses cleanly. Avoids the previous greedy regex
+    that could splice two unrelated JSON blobs together. Non-StarAI JSON
+    objects are skipped so a diagnostic blob cannot hide the real reply."""
+    idx = 0
+    while True:
+        start = text.find("{", idx)
+        if start == -1:
+            return None
+        try:
+            obj, end = _JSON_DECODER.raw_decode(text, start)
+        except json.JSONDecodeError:
+            idx = start + 1
+            continue
+        if _is_ai_response_object(obj):
+            return obj
+        idx = end
+
+
+def _load_ai_response_object(text: str) -> Optional[Dict[str, Any]]:
+    try:
+        obj = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    return obj if _is_ai_response_object(obj) else None
+
+
+def _response_message(parsed: Dict[str, Any], fallback: str) -> str:
+    message = parsed.get("message")
+    return message if isinstance(message, str) else fallback
+
+
 def _parse_ai_response(text: str) -> Optional[Dict[str, Any]]:
     """Best-effort JSON extraction from a model response. Models often
     wrap JSON in ```json … ``` fences or surround it with prose."""
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        pass
-    json_match = re.search(r'```(?:json)?\s*([\s\S]*?)```', text)
-    if json_match:
-        try:
-            return json.loads(json_match.group(1).strip())
-        except json.JSONDecodeError:
-            pass
-    json_obj_match = re.search(r'\{[\s\S]*"message"[\s\S]*\}', text)
-    if json_obj_match:
-        try:
-            return json.loads(json_obj_match.group(0))
-        except json.JSONDecodeError:
-            pass
-    return None
+    loaded = _load_ai_response_object(text)
+    if loaded is not None:
+        return loaded
+    fence_match = re.search(r'```(?:json)?\s*([\s\S]*?)```', text)
+    if fence_match:
+        fenced = fence_match.group(1).strip()
+        loaded = _load_ai_response_object(fenced)
+        if loaded is not None:
+            return loaded
+        scanned = _scan_first_ai_response_object(fenced)
+        if scanned is not None:
+            return scanned
+    return _scan_first_ai_response_object(text)
 
 
 async def _ask_anthropic(
@@ -270,7 +329,7 @@ async def _ask_anthropic(
     if parsed is None:
         return _wrap_response(text, [], lang=lang, source="anthropic")
     return _wrap_response(
-        parsed.get("message", text),
+        _response_message(parsed, text),
         parsed.get("actions", []),
         lang=lang,
         source="anthropic",
@@ -324,7 +383,7 @@ async def _ask_openrouter(
     if parsed is None:
         return _wrap_response(text, [], lang=lang, source="openrouter")
     return _wrap_response(
-        parsed.get("message", text),
+        _response_message(parsed, text),
         parsed.get("actions", []),
         lang=lang,
         source="openrouter",
@@ -339,7 +398,7 @@ async def ask_starai(
     """Send a message to StarAI and receive response + UI commands.
 
     Provider routing:
-    - server-side OPENROUTER_API_KEY -> OpenRouter with default model
+    - server-side OPENROUTER_API_KEY -> OpenRouter with fixed model
     - server-side ANTHROPIC_API_KEY -> Claude direct fallback
     - otherwise → offline fallback (canned responses)
     """

@@ -14,11 +14,11 @@ import { twoline2satrec, propagate } from 'satellite.js';
 import { getSimTime } from '../simClock';
 import { useStore } from '../hooks/useStore';
 import { CONSTELLATION_COLORS, CONSTELLATION_NAMES } from '../constants';
+import { computeVirtualECI, EARTH_RADIUS_KM, SCENE_SCALE } from '../lib/orbital';
 import type { SatellitePosition, TLEData } from '../types';
 
-const R_E = 6371.0;
-const MU = 398600.4418;
-const SCALE = 1 / R_E;
+const R_E = EARTH_RADIUS_KM;
+const SCALE = SCENE_SCALE;
 const SHELL_RADIUS = 1.008;
 const MAX_SATS = 15;
 const MIN_ELEVATION_RAD = 10 * Math.PI / 180;
@@ -75,35 +75,7 @@ function selectUniformly<T>(arr: T[], count: number): T[] {
   return Array.from({ length: count }, (_, i) => arr[Math.floor(i * step)]);
 }
 
-function virtualECI(
-  i: number,
-  total: number,
-  altKm: number,
-  tSec: number,
-  planes: number,
-): { x: number; y: number; z: number } {
-  const a = R_E + altKm;
-  const n = Math.sqrt(MU / (a * a * a));
-  const incl = (55 * Math.PI) / 180;
-  const P = Math.max(1, Math.min(planes, total));
-  const spp = Math.ceil(total / P);
-  const pi = i % P;
-  const si = Math.floor(i / P);
-  const raan = (pi / P) * 2 * Math.PI;
-  const F = P > 1 ? Math.max(1, Math.floor(P / 2)) : 0;
-  const phase = (si / spp) * 2 * Math.PI
-    + (F * pi / P) * (2 * Math.PI / spp);
-  const M = n * tSec + phase;
-  const xOrb = a * Math.cos(M);
-  const yOrb = a * Math.sin(M);
-  const cosR = Math.cos(raan), sinR = Math.sin(raan);
-  const cosI = Math.cos(incl), sinI = Math.sin(incl);
-  return {
-    x: xOrb * cosR - yOrb * cosI * sinR,
-    y: xOrb * sinR + yOrb * cosI * cosR,
-    z: yOrb * sinI,
-  };
-}
+const virtualECI = computeVirtualECI;
 
 function usefulCoverageCosTheta(rKm: number, commRangeKm: number): number | null {
   const altitudeKm = rKm - R_E;

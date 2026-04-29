@@ -9,36 +9,10 @@ import { Satellites } from './Satellites';
 import { InterSatelliteLinks } from './InterSatelliteLinks';
 import { CoverageZones } from './CoverageZones';
 import { useStore } from '../hooks/useStore';
+import { computeVirtualECI, SCENE_SCALE } from '../lib/orbital';
 import type { SatellitePosition, OrbitPoint, TLEData } from '../types';
 
-const EARTH_RADIUS = 6371.0;
-const MU = 398600.4418;
-const CAM_SCALE = 1 / EARTH_RADIUS;
-
-// ── Helper: compute virtual orbit position ──────────────────────────
-function computeVirtualECI(index: number, total: number, altKm: number, simTimeSec: number, planes: number = 1) {
-  const a = EARTH_RADIUS + altKm;
-  const n = Math.sqrt(MU / (a * a * a));
-  const incl = (55 * Math.PI) / 180;
-  const P = Math.max(1, Math.min(planes, total));
-  const satsPerPlane = Math.ceil(total / P);
-  const planeIdx = index % P;
-  const satInPlane = Math.floor(index / P);
-  const raan = (planeIdx / P) * 2 * Math.PI;
-  // Walker-δ T/P/F: inter-plane phase offset for uniform coverage
-  const F = P > 1 ? Math.max(1, Math.floor(P / 2)) : 0;
-  const phase = (satInPlane / satsPerPlane) * 2 * Math.PI
-    + (F * planeIdx / P) * (2 * Math.PI / satsPerPlane);
-  const M = n * simTimeSec + phase;
-  const xOrb = a * Math.cos(M);
-  const yOrb = a * Math.sin(M);
-  const xInc = xOrb;
-  const yInc = yOrb * Math.cos(incl);
-  const zInc = yOrb * Math.sin(incl);
-  const cosR = Math.cos(raan);
-  const sinR = Math.sin(raan);
-  return { x: xInc * cosR - yInc * sinR, y: xInc * sinR + yInc * cosR, z: zInc };
-}
+const CAM_SCALE = SCENE_SCALE;
 
 // ── Coordinate grid (equator + latitude circles), rotates with Earth
 function CoordinateGrid() {
