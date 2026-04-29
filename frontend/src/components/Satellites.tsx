@@ -169,6 +169,8 @@ interface SatMarkerProps {
   initPos: Vector3;
   // For client-side SGP4: ref to function returning current ECI position
   getECI?: () => { x: number; y: number; z: number } | null;
+  // True when TLE was loaded live from CelesTrak (not embedded fallback)
+  isLive?: boolean;
 }
 
 const SatMarker = memo(function SatMarker({
@@ -180,10 +182,12 @@ const SatMarker = memo(function SatMarker({
   onClick,
   initPos,
   getECI,
+  isLive = false,
 }: SatMarkerProps) {
   const groupRef = useRef<Group>(null);
   const bodyRef = useRef<Group>(null);
   const [labelVisible, setLabelVisible] = useState(true);
+  const [hovered, setHovered] = useState(false);
   // Track visibility in a ref to avoid stale closure in setLabelVisible
   const visibleRef = useRef(true);
   const frameCountRef = useRef(0);
@@ -232,7 +236,13 @@ const SatMarker = memo(function SatMarker({
   });
 
   return (
-    <group ref={groupRef} position={initPos} onClick={onClick}>
+    <group
+      ref={groupRef}
+      position={initPos}
+      onClick={onClick}
+      onPointerEnter={() => setHovered(true)}
+      onPointerLeave={() => setHovered(false)}
+    >
       <group ref={bodyRef}>
         {modelType === 0 ? (
           <CubeSat1U color={color} emissiveIntensity={emissiveIntensity} />
@@ -251,6 +261,47 @@ const SatMarker = memo(function SatMarker({
         />
       </mesh>
 
+      {/* Live indicator dot (CelesTrak) — always visible, tooltip on hover */}
+      {isLive && (
+        <Html
+          position={[0.022, 0.022, 0]}
+          zIndexRange={[5, 0]}
+          style={{ pointerEvents: 'none' }}
+        >
+          <div style={{ position: 'relative' }}>
+            <div
+              style={{
+                width: '7px',
+                height: '7px',
+                borderRadius: '50%',
+                background: '#22c55e',
+                boxShadow: '0 0 5px #22c55e, 0 0 10px rgba(34,197,94,0.4)',
+                flexShrink: 0,
+              }}
+            />
+            {hovered && (
+              <div
+                style={{
+                  position: 'absolute',
+                  left: '11px',
+                  top: '-5px',
+                  background: 'rgba(0,0,0,0.85)',
+                  color: '#22c55e',
+                  padding: '2px 7px',
+                  borderRadius: '4px',
+                  fontSize: '11px',
+                  whiteSpace: 'nowrap',
+                  border: '1px solid rgba(34,197,94,0.35)',
+                  pointerEvents: 'none',
+                }}
+              >
+                Live · CelesTrak
+              </div>
+            )}
+          </div>
+        </Html>
+      )}
+
       {/* Подпись — hidden when behind Earth via manual occlusion check */}
       {showLabel && labelVisible && (
         <Html
@@ -265,6 +316,9 @@ const SatMarker = memo(function SatMarker({
           style={{ pointerEvents: 'none' }}
         >
           <div className="sat-label" style={{ color }}>
+            {isLive && (
+              <span style={{ color: '#22c55e', marginRight: '3px', fontSize: '9px' }}>●</span>
+            )}
             {name}
             {isSelected && (
               <div style={{ fontSize: '8px', opacity: 0.7 }}>
@@ -416,6 +470,15 @@ export function Satellites({
     }
   }, [tleData]);
 
+  // Set of NORAD IDs with live TLE from CelesTrak (source === 'celestrak')
+  const liveSatSet = useMemo(() => {
+    const s = new Set<number>();
+    tleData.forEach((tle) => {
+      if (tle.source === 'celestrak') s.add(tle.norad_id);
+    });
+    return s;
+  }, [tleData]);
+
   // Advance shared simTime on each frame (single source of truth)
   // Clamp delta to avoid huge time jumps when returning from background tab
   useFrame((_, delta) => {
@@ -542,6 +605,7 @@ export function Satellites({
             )}
             initPos={getInitialPos(pos.norad_id)}
             getECI={getGetECI(pos.norad_id)}
+            isLive={liveSatSet.has(pos.norad_id)}
           />
         );
       })}

@@ -192,6 +192,13 @@ async def fetch_celestrak_tle(norad_ids: Optional[List[int]] = None) -> Dict[int
     Если norad_ids=None, загружает для всех спутников из каталога.
     Возвращает dict: norad_id -> (tle_line1, tle_line2).
     Потокобезопасен благодаря asyncio.Lock.
+
+    Стратегия: частичный кэш + двухфазный fetch.
+    Фаза 1 — групповые эндпойнты (cubesat / amateur) + зеркала.
+    Фаза 2 — per-NORAD lookup только для спутников, не найденных в фазе 1.
+    Это снижает число одновременных запросов (меньше шанс rate-limit) и
+    позволяет получить данные даже если спутник не входит в стандартные
+    группы CelesTrak.
     """
     global _tle_cache, _cache_timestamp, _last_fetch_ok, _last_fetch_error, _last_fetch_attempt
 
@@ -200,109 +207,140 @@ async def fetch_celestrak_tle(norad_ids: Optional[List[int]] = None) -> Dict[int
         norad_ids = [s.norad_id for s in RUSSIAN_CUBESATS if is_operational(s.status)]
 
     async with _cache_lock:
-        # Check cache (inside lock to prevent duplicate requests)
         now = time.time()
-        if _tle_cache and (now - _cache_timestamp) < CACHE_TTL_SEC:
-            cached = {nid: _tle_cache[nid] for nid in norad_ids if nid in _tle_cache}
-            if len(cached) == len(norad_ids):
-                logger.debug("TLE cache hit: %d/%d satellites", len(cached), len(norad_ids))
-                return cached
 
-        # Try to load from group files
+        # Partial cache hit: use what's already cached and only fetch the rest.
+        # The old code required ALL satellites to be cached and would redo all
+        # 17+ requests even when 12 of 14 were already fresh — that triggered
+        # CelesTrak rate-limiting on every page load.
+        if _tle_cache and (now - _cache_timestamp) < CACHE_TTL_SEC:
+            cached_hits = {nid: _tle_cache[nid] for nid in norad_ids if nid in _tle_cache}
+            if len(cached_hits) == len(norad_ids):
+                logger.debug("TLE cache hit: %d/%d satellites", len(cached_hits), len(norad_ids))
+                return cached_hits
+            missing_ids = [nid for nid in norad_ids if nid not in _tle_cache]
+            logger.debug(
+                "TLE partial cache: %d hit, %d to fetch",
+                len(cached_hits), len(missing_ids),
+            )
+        else:
+            cached_hits = {}
+            missing_ids = list(norad_ids)
+
         all_tle: Dict[int, Tuple[str, str]] = {}
-        target_set = set(norad_ids)
+        target_set = set(missing_ids)
         network_error: Optional[str] = None
         _last_fetch_attempt = time.time()
 
         try:
-            # Single-pass parallel fetch: kick off group files AND a
-            # per-NORAD lookup for every requested satellite at the same
-            # time. Group results usually arrive first and populate most
-            # entries; per-NORAD fetches fill in anything the groups miss
-            # (Russian CubeSats often aren't in the "cubesat"/"amateur"
-            # CelesTrak groups, so the old "groups first, then individuals"
-            # pipeline doubled latency — every cold load paid both phases).
-            # Per-request timeout is bounded so a single slow CelesTrak
-            # response cannot hold the cache lock for tens of seconds.
             # connect=3s: when CelesTrak is blocked at the network edge
-            # (common from RU networks), every connection attempt times
-            # out; a 3 s budget makes the whole "tried, failed, falling
-            # back to embedded" loop feel snappy instead of frozen.
+            # (common from RU networks), every connection attempt times out;
+            # a 3 s budget makes the "tried, failed, fall back" loop snappy.
             timeout = httpx.Timeout(connect=3.0, read=10.0, write=5.0, pool=5.0)
             limits = httpx.Limits(max_connections=32, max_keepalive_connections=16)
+            # CelesTrak blocks requests without a recognisable User-Agent —
+            # sending a descriptive UA avoids silent 403/429 rejections.
+            headers = {"User-Agent": "StarVision/1.0 (educational CubeSat tracker)"}
             async with httpx.AsyncClient(
                 timeout=timeout, http2=_HTTP2_AVAILABLE, limits=limits,
-                follow_redirects=True,
+                follow_redirects=True, headers=headers,
             ) as client:
-                # Wrap as Tasks so we can harvest finished work after a
-                # wall-clock timeout. Without explicit Task wrapping a
-                # cancelled gather would discard partial results.
-                tasks: list[asyncio.Task] = []
-                for url in CELESTRAK_URLS:
-                    tasks.append(asyncio.create_task(_fetch_url(client, url)))
-                for nid in norad_ids:
-                    tasks.append(asyncio.create_task(_fetch_url(
-                        client,
-                        f"https://celestrak.org/NORAD/elements/gp.php?CATNR={nid}&FORMAT=tle",
-                    )))
-                for url in MIRROR_URLS:
-                    tasks.append(asyncio.create_task(_fetch_url(client, url)))
-                logger.info(
-                    "TLE fetch: %d total requests in parallel (CelesTrak + mirrors)",
-                    len(tasks),
-                )
-                # Hard wall-clock cap on the entire fetch. httpx's per-
-                # request connect timeout interacts with HTTP/2 and DNS
-                # retries in ways that can stretch a cold "blocked host"
-                # fetch to tens of seconds. A 6 s ceiling guarantees the
-                # user sees feedback fast — anything that arrived before
-                # the deadline is still committed to the cache.
-                done, pending = await asyncio.wait(tasks, timeout=6.0)
-                if pending:
-                    logger.warning(
-                        "TLE fetch hit 6s wall-clock cap; %d pending, %d done",
-                        len(pending), len(done),
-                    )
-                    for fut in pending:
-                        fut.cancel()
+                # ── Phase 1: group endpoints + mirrors ─────────────────────
+                # Group URLs usually cover most CubeSats in a single response.
+                # Fetching only 3 URLs in parallel (vs the old 17) avoids
+                # triggering CelesTrak's per-IP rate limiter.
+                phase1: list[asyncio.Task] = [
+                    asyncio.create_task(_fetch_url(client, url))
+                    for url in CELESTRAK_URLS + MIRROR_URLS
+                ]
+                logger.info("TLE phase 1: %d group/mirror requests", len(phase1))
+                done1, pending1 = await asyncio.wait(phase1, timeout=7.0)
+                for fut in pending1:
+                    fut.cancel()
+                    logger.warning("TLE phase 1 task cancelled (timeout)")
 
-                for fut in done:
+                for fut in done1:
                     try:
-                        result = fut.result()
+                        res = fut.result()
                     except Exception:  # noqa: BLE001
                         continue
-                    if isinstance(result, dict):
-                        for nid, tle in result.items():
+                    if isinstance(res, dict):
+                        for nid, tle in res.items():
                             if nid in target_set:
                                 all_tle[nid] = tle
+
+                logger.info(
+                    "TLE phase 1 done: %d/%d found",
+                    len(all_tle), len(missing_ids),
+                )
+
+                # ── Phase 2: per-NORAD for anything still missing ──────────
+                # Russian CubeSats often aren't listed in the standard
+                # "cubesat" or "amateur" groups, so we fall back to individual
+                # CATNR lookups — but only for the satellites we didn't get
+                # from the group files. This keeps the number of simultaneous
+                # requests small enough that CelesTrak won't rate-limit us.
+                still_missing = [nid for nid in missing_ids if nid not in all_tle]
+                if still_missing:
+                    phase2: list[asyncio.Task] = [
+                        asyncio.create_task(_fetch_url(
+                            client,
+                            f"https://celestrak.org/NORAD/elements/gp.php?CATNR={nid}&FORMAT=tle",
+                        ))
+                        for nid in still_missing
+                    ]
+                    logger.info(
+                        "TLE phase 2: %d per-NORAD lookups for missing satellites",
+                        len(phase2),
+                    )
+                    done2, pending2 = await asyncio.wait(phase2, timeout=10.0)
+                    for fut in pending2:
+                        fut.cancel()
+                        logger.warning("TLE phase 2 task cancelled (timeout)")
+
+                    for fut in done2:
+                        try:
+                            res = fut.result()
+                        except Exception:  # noqa: BLE001
+                            continue
+                        if isinstance(res, dict):
+                            for nid, tle in res.items():
+                                if nid in target_set:
+                                    all_tle[nid] = tle
+
+                    logger.info(
+                        "TLE phase 2 done: %d/%d found",
+                        len([n for n in still_missing if n in all_tle]),
+                        len(still_missing),
+                    )
+
         except Exception:
             # Full traceback goes to server logs only; clients see an
             # opaque code via get_cache_status().
             logger.exception("CelesTrak network error")
             network_error = ERR_NETWORK
 
-        # Update cache
+        # Update cache with newly fetched entries
         if all_tle:
             _tle_cache.update(all_tle)
             _cache_timestamp = time.time()
             _last_fetch_ok = True
             _last_fetch_error = None
             logger.info(
-                "TLE cache updated: %d/%d satellites fetched from CelesTrak",
-                len(all_tle), len(norad_ids),
+                "TLE cache updated: %d/%d missing fetched, %d total cached",
+                len(all_tle), len(missing_ids), len(_tle_cache),
             )
-            result = {}
-            for nid in norad_ids:
-                if nid in all_tle:
-                    result[nid] = all_tle[nid]
-                elif nid in _tle_cache:
-                    result[nid] = _tle_cache[nid]
-            return result
+        elif missing_ids:
+            # Had satellites to fetch but got nothing new
+            _last_fetch_ok = False
+            _last_fetch_error = network_error or ERR_EMPTY
 
-        _last_fetch_ok = False
-        _last_fetch_error = network_error or ERR_EMPTY
+        # Return merged: previously-cached + newly-fetched
+        merged = {**cached_hits, **all_tle}
+        if merged:
+            return {nid: merged[nid] for nid in norad_ids if nid in merged}
 
-        # Network down — serve stale cache if available
+        # Network down and no partial cache — serve stale cache if available
         if _tle_cache:
             logger.warning("CelesTrak unavailable, using stale cache (%d entries)", len(_tle_cache))
             return {nid: _tle_cache[nid] for nid in norad_ids if nid in _tle_cache}
@@ -315,7 +353,14 @@ async def _fetch_url(client: httpx.AsyncClient, url: str) -> Dict[int, Tuple[str
     try:
         resp = await client.get(url)
         if resp.status_code == 404:
-            logger.debug("CelesTrak 404 for %s (satellite may be deorbited)", url.split("CATNR=")[-1].split("&")[0] if "CATNR=" in url else url)
+            label = url.split("CATNR=")[-1].split("&")[0] if "CATNR=" in url else url.split("?")[0]
+            logger.debug("CelesTrak 404 for %s (satellite may be deorbited)", label)
+            return {}
+        if resp.status_code == 429:
+            # Rate-limited — log and return empty; caller will fall back
+            # to embedded data. Do NOT raise: that would pollute the error
+            # counter and mask the real cause in logs.
+            logger.warning("CelesTrak rate limit (429) for %s", url.split("?")[0])
             return {}
         resp.raise_for_status()
         parsed = _parse_tle_text(resp.text)
@@ -325,7 +370,7 @@ async def _fetch_url(client: httpx.AsyncClient, url: str) -> Dict[int, Tuple[str
     except Exception:
         # Server-side only; the exception object is not returned or
         # embedded in any value that could flow to a client.
-        logger.warning("CelesTrak fetch failed for %s", url, exc_info=True)
+        logger.warning("CelesTrak fetch failed for %s", url.split("?")[0], exc_info=True)
         return {}
 
 
