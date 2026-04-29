@@ -1,6 +1,6 @@
-# StarVision v1.2 — CubeSat Constellation Digital Twin
+# StarVision v1.3 — CubeSat Constellation Digital Twin
 
-# StarVision v1.2 — Цифровой двойник группировки кубсатов
+# StarVision v1.3 — Цифровой двойник группировки кубсатов
 
 > **Hackathon: Digital Twins of Space Systems** | **Хакатон: Цифровые двойники космических систем**
 >
@@ -33,7 +33,7 @@ Walker-режим, визуализацию межспутниковых свя�
 
 | Requirement / Требование | Implementation / Реализация | Location / Где смотреть |
 |---|---|---|
-| 3–15 satellites in 3D | Slider 3..15 clamps at store level | [ControlPanel.tsx](frontend/src/components/ControlPanel.tsx), [useStore.ts](frontend/src/hooks/useStore.ts), [clamps.ts](frontend/src/lib/clamps.ts) |
+| 3–15 satellites in 3D | Slider 3..15 matches the 15-spacecraft catalog (uniform selection across constellations) | [ControlPanel.tsx](frontend/src/components/ControlPanel.tsx), [useStore.ts](frontend/src/hooks/useStore.ts), [clamps.ts](frontend/src/lib/clamps.ts) |
 | Orbital motion modeling | Client-side SGP4 via `satellite.js` + server-side python-sgp4 | [Satellites.tsx](frontend/src/components/Satellites.tsx), [orbital.py](backend/orbital.py) |
 | Inter-satellite links | Per-frame distance + Earth-shadow LOS, object pooling | [InterSatelliteLinks.tsx](frontend/src/components/InterSatelliteLinks.tsx) |
 | UI parameters (≥ 3) | Count, altitude (TLE or 400–2000 km), comm range 50–2000 km, speed, planes, coverage, labels, constellation filter | [ControlPanel.tsx](frontend/src/components/ControlPanel.tsx) |
@@ -78,7 +78,7 @@ Walker-режим, визуализацию межспутниковых свя�
 
 **StarVision** is a digital twin of a Russian CubeSat constellation featuring:
 
-- Real-time 3D visualization of 3–15 satellites in orbit
+- Real-time 3D visualization of 3–15 satellites in orbit (15-spacecraft catalog cap)
 - Orbital motion modeling via SGP4 propagation (client-side `satellite.js`)
 - Dynamic inter-satellite link (ISL) visualization with Earth-shadow LOS checks
 - **Automatic TLE loading from CelesTrak** with source selection (embedded / live)
@@ -88,7 +88,7 @@ Walker-режим, визуализацию межспутниковых свя�
 
 **StarVision** — цифровой двойник группировки российских кубсатов:
 
-- 3D-визуализация 3–15 спутников на орбите в реальном времени
+- 3D-визуализация 3–15 спутников на орбите в реальном времени (каталог из 15 КА — это и есть лимит)
 - Моделирование орбитального движения через SGP4 (`satellite.js` на клиенте)
 - Динамические межспутниковые связи (МСС) с проверкой затенения Землёй
 - **Автоматическая подгрузка TLE с CelesTrak** с выбором источника данных
@@ -100,7 +100,7 @@ Walker-режим, визуализацию межспутниковых свя�
 
 ## Features / Возможности
 
-- **15 Russian spacecraft** catalog (14 active + 1 deorbited): Descartes, NORBI, Yarilo-1, CubeSX-HSE, UmKA-1, NORBI-2, CubeSX-HSE-3, Monitor-2, Yarilo-3, SamSat-Ionosphere, TUSUR GO, RTU MIREA-1, Horizont, ASRTU-1, Geoscan-Edelveis
+- **15 Russian spacecraft** catalog (all active, hard cap): Dekart, NORBI, Yarilo-1, CubeSX-HSE, UmKA-1, NORBI-2, CubeSX-HSE-3, Monitor-2, Yarilo-3, SamSat-Ionosphere, TUSUR GO, RTU MIREA-1, Horizont, ASRTU-1, Vizard-ion
 - **Client-side SGP4** via `satellite.js` — smooth per-frame animation
 - **Inter-satellite links (ISL)** — per-frame distance calculation with LOS check (Earth shadow)
 - **TLE source: embedded data or CelesTrak** — one-click switching
@@ -259,10 +259,10 @@ Frontend auto-proxies `/api/*` to `localhost:8000` (configured in `vite.config.t
 
 | Constellation / Группировка | Satellites / Спутники | Purpose / Назначение | Form factor / Форм-фактор |
 |---|---|---|---|
-| **UniverSat / УниверСат** | Descartes (46493), NORBI (46494), NORBI-2 (57179), SamSat-Ionosphere (61784) | EO, AIS, radiation, ionosphere / ДЗЗ, AIS, радиация, ионосфера | 3U / 6U |
+| **UniverSat / УниверСат** | Dekart (46493), NORBI (46494), NORBI-2 (57179), SamSat-Ionosphere (61784) | EO, AIS, radiation, ionosphere / ДЗЗ, AIS, радиация, ионосфера | 3U / 6U |
 | **Bauman MSTU / МГТУ Баумана** | Yarilo-1 (46490), UmKA-1 (57172), Yarilo-3 (57198) | Solar physics, tech demo / Солнечная физика, технодемо | 1.5U / 3U |
 | **SPUTNIX** | CubeSX-HSE (47952), CubeSX-HSE-3 (57178) | Earth observation, experiments / ДЗЗ, эксперименты | 3U |
-| **Geoscan / Геоскан** | Geoscan-Edelveis (53385) ⚠ deorbited / деорбитирован | Platform test, propulsion / Испытание платформы | 3U |
+| **Geoscan / Геоскан** | Vizard-ion (61749) | VERA plasma thruster, ionosphere radio occultation / Двигатель VERA, радиозатменное зондирование | 3U |
 | **SINP MSU / НИИЯФ МГУ** | Monitor-2 (57184) | X-ray/gamma observations / Рентген/гамма | 3U |
 | **Space-Pi** | TUSUR GO (61782), RTU MIREA-1 (61785), Horizont (61757), ASRTU-1 (61781) | Educational, scientific / Образовательные, научные | 3U |
 
