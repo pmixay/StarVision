@@ -13,12 +13,12 @@ interface HeaderProps {
 
 function sourceLabel(effective: EffectiveTleSource | undefined, lang: Lang): string {
   switch (effective) {
-    case 'celestrak': return t('header.sourceCelestrak', lang);
-    case 'celestrak_partial': return t('header.sourcePartial', lang);
-    case 'embedded_fallback': return t('header.sourceFallback', lang);
+    case 'celestrak': return t('source.liveShort', lang);
+    case 'celestrak_partial': return t('source.partialShort', lang);
+    case 'embedded_fallback': return t('source.demoFallbackShort', lang);
     case 'embedded':
     default:
-      return t('header.sourceEmbedded', lang);
+      return t('source.demoShort', lang);
   }
 }
 
@@ -119,7 +119,7 @@ export function Header({ satelliteCount, activeCount, timeSpeed, activeLinksCoun
               label={t('header.source', lang)}
               value={srcText}
               valueClass={srcClass}
-              title={tleMeta ? `requested=${tleMeta.requested_source} live=${tleMeta.live_count}/${tleMeta.total}` : undefined}
+              title={tleMeta ? `${t('header.source', lang)}: ${srcText}; requested=${tleMeta.requested_source}; live=${tleMeta.live_count}/${tleMeta.total}; fallback=${tleMeta.fallback_count}` : undefined}
             />
             <Divider />
             <StatusItem label={t('header.fresh', lang)} value={freshness} />

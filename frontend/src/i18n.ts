@@ -99,6 +99,27 @@ export const translations = {
   'info.launch': { ru: 'Запуск', en: 'Launch' },
   'info.focusCamera': { ru: 'Навести камеру', en: 'Focus camera' },
 
+  // Virtual satellites / units / source labels
+  'virtual.name': { ru: 'ВиртСпутник-{index}', en: 'VirtSat-{index}' },
+  'virtual.purpose': { ru: 'Виртуальный спутник', en: 'Virtual satellite' },
+  'virtual.formFactor': { ru: 'Виртуальный', en: 'Virtual' },
+  'virtual.description': {
+    ru: 'Виртуальный спутник на круговой орбите высотой {altitude} км, наклонение {inclination}°, {planes} плоскостей, {count} КА.',
+    en: 'Virtual satellite on a circular orbit at {altitude} km altitude, {inclination}° inclination, {planes} orbital planes, {count} total S/C.',
+  },
+  'unit.km': { ru: 'км', en: 'km' },
+  'unit.kmps': { ru: 'км/с', en: 'km/s' },
+  'unit.min': { ru: 'мин', en: 'min' },
+  'source.liveShort': { ru: 'LIVE', en: 'LIVE' },
+  'source.partialShort': { ru: 'ЧАСТ. LIVE', en: 'PARTIAL LIVE' },
+  'source.demoShort': { ru: 'ДЕМО', en: 'DEMO' },
+  'source.demoFallbackShort': { ru: 'ДЕМО-FB', en: 'DEMO FB' },
+  'source.fallbackShort': { ru: 'резерв', en: 'fallback' },
+  'source.liveLong': { ru: 'CelesTrak (live)', en: 'CelesTrak (live)' },
+  'source.partialLong': { ru: 'CelesTrak (частично live)', en: 'CelesTrak (partial live)' },
+  'source.demoLong': { ru: 'Embedded demo orbital set', en: 'Embedded demo orbital set' },
+  'source.demoFallbackLong': { ru: 'Embedded demo fallback', en: 'Embedded demo fallback' },
+
   // StarAI Chat
   'chat.analyzing': { ru: 'Анализирую...', en: 'Analyzing...' },
   'chat.ready': { ru: 'Готов помочь', en: 'Ready to help' },
@@ -179,6 +200,7 @@ export const translations = {
   'collision.title': { ru: 'Прогноз сближений', en: 'Collision forecast' },
   'collision.threshold': { ru: 'Порог (км)', en: 'Threshold (km)' },
   'collision.horizon': { ru: 'Горизонт (ч)', en: 'Horizon (h)' },
+  'collision.mode': { ru: 'Режим расчёта', en: 'Calculation mode' },
   'collision.run': { ru: 'Рассчитать', en: 'Run forecast' },
   'collision.running': { ru: 'Считаю...', en: 'Computing...' },
   'collision.none': { ru: 'Опасных сближений не найдено', en: 'No risky approaches found' },
@@ -193,6 +215,10 @@ export const translations = {
   'optimizer.sats': { ru: 'Спутники', en: 'Satellites' },
   'optimizer.period': { ru: 'Период', en: 'Period' },
   'optimizer.velocity': { ru: 'Скорость', en: 'Velocity' },
+  'optimizer.coverageNote': {
+    ru: 'Walker-δ {walker}: {planes} плоскостей RAAN через {spacing}°, {satsPerPlane} КА/плоскость, межплоскостный сдвиг F={phase}',
+    en: 'Walker-δ {walker}: {planes} RAAN planes spaced by {spacing}°, {satsPerPlane} S/C per plane, inter-plane phase F={phase}',
+  },
 
   // Constellation names
   'constellation.universat': { ru: 'УниверСат', en: 'UniverSat' },

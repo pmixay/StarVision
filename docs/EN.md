@@ -1,4 +1,4 @@
-# StarVision v1.2 — CubeSat Constellation Digital Twin
+# StarVision v1.3 — CubeSat Constellation Digital Twin
 
 > **Hackathon: Digital Twins of Space Systems**
 > Interactive 3D prototype of a CubeSat constellation digital twin
@@ -13,7 +13,7 @@
 - Real-time 3D visualization of 3–15 satellites in orbit
 - Orbital motion modeling via SGP4 propagation (client-side `satellite.js`)
 - Dynamic inter-satellite link (ISL) visualization with LOS checks
-- **Automatic TLE loading from CelesTrak** with source selection (embedded / live)
+- **Automatic TLE loading from CelesTrak** with explicit source labeling (embedded demo / live / fallback)
 - UI controls for satellite count, orbit altitude, communication range, and more
 - Multilingual interface (Russian / English)
 - AI assistant (StarAI) powered by server-side OpenRouter API
@@ -22,7 +22,7 @@
 
 ## Features
 
-- **15 Russian spacecraft** catalog (14 active + 1 deorbited): Descartes, NORBI, Yarilo-1, CubeSX-HSE, UmKA-1, NORBI-2, CubeSX-HSE-3, Monitor-2, Yarilo-3, SamSat-Ionosphere, TUSUR GO, RTU MIREA-1, Horizont, ASRTU-1, Geoscan-Edelveis
+- **15 Russian spacecraft** catalog (all active, hard cap matching the slider): Dekart, NORBI, Yarilo-1, CubeSX-HSE, UmKA-1, NORBI-2, CubeSX-HSE-3, Monitor-2, Yarilo-3, SamSat-Ionosphere, TUSUR GO, RTU MIREA-1, Horizont, ASRTU-1, Vizard-ion
 - **Client-side SGP4** via `satellite.js` — smooth per-frame animation
 - **Inter-satellite links (ISL)** — per-frame distance calculation with LOS check (Earth shadow)
 - **TLE source: embedded data or CelesTrak** — one-click switching
@@ -31,15 +31,16 @@
 - **StarAI** — built-in AI assistant (server-side OpenRouter API) with UI control commands
 - **Virtual Walker orbits** — configurable altitude (400–2000 km), 1–7 orbital planes
 - **Ground coverage zones** — real-time satellite footprint visualization (horizon circle on Earth)
-- **Optimized rendering** — object pooling, throttled raycasting, adaptive DPR
+- **Optimized rendering** — object pooling, throttled raycasting, reduced per-frame work
 
 ### Parameters
 
 | Parameter | Range | Description |
 |---|---|---|
 | Satellite count | 3–15 | Uniform selection from catalog |
-| Orbit altitude | TLE / 400–2000 km | TLE = real data; otherwise virtual Walker constellation |
-| TLE source | Embedded / CelesTrak | Choose between demo data and live CelesTrak TLE |
+| Orbit altitude | TLE / 400–2000 km | TLE = live/demo source; otherwise virtual Walker constellation |
+| TLE source | Embedded / CelesTrak | Choose between embedded demo data and live CelesTrak TLE |
+| Inclination | 0–180° | Virtual Walker inclination |
 | Communication range | 50–2,000 km | ISL link visibility threshold |
 | Simulation speed | 1×–200× | Time acceleration presets |
 | ISL links | on/off | Show/hide inter-satellite links |
@@ -72,10 +73,9 @@ Measurements taken with 15 satellites, ISL links enabled, orbital tracks visible
 |---|---|
 | Object pooling (Three.js geometries/materials) | Reduces GC pauses, stable frame times |
 | Client-side SGP4 (`satellite.js`) | Eliminates network latency per frame |
-| Adaptive DPR (device pixel ratio) | Auto-adjusts resolution to maintain target FPS |
 | Throttled ISL recalculation | LOS checks every 2nd frame on low-end devices |
 | Shared `simClock` | Single time source — no redundant Date.now() calls |
-| Instanced rendering for orbit tracks | One draw call per constellation |
+| Batched orbit prefetch | One batch request instead of N orbit requests |
 
 ### Test Stand
 
@@ -114,6 +114,19 @@ Not supported: Internet Explorer, browsers without WebGL 2.0.
 
 ### Backend
 
+PowerShell:
+
+```powershell
+cd backend
+python -m venv venv
+.\venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+Copy-Item .env.example .env
+uvicorn main:app --reload --port 8000
+```
+
+macOS / Linux:
+
 ```bash
 cd backend
 python -m venv venv
@@ -124,6 +137,16 @@ uvicorn main:app --reload --port 8000
 ```
 
 ### Frontend
+
+PowerShell:
+
+```powershell
+cd frontend
+npm install
+npm run dev
+```
+
+macOS / Linux:
 
 ```bash
 cd frontend
@@ -139,10 +162,10 @@ Frontend auto-proxies `/api/*` to `localhost:8000` (configured in `vite.config.t
 
 | Constellation | Satellites | Purpose | Form factor |
 |---|---|---|---|
-| **UniverSat** | Descartes (46493), NORBI (46494), NORBI-2 (57179), SamSat-Ionosphere (61784) | EO, AIS, radiation, ionosphere | 3U / 6U |
+| **UniverSat** | Dekart (46493), NORBI (46494), NORBI-2 (57179), SamSat-Ionosphere (61784) | EO, AIS, radiation, ionosphere | 3U / 6U |
 | **Bauman MSTU** | Yarilo-1 (46490), UmKA-1 (57172), Yarilo-3 (57198) | Solar physics, technology demo | 1.5U / 3U |
 | **SPUTNIX** | CubeSX-HSE (47952), CubeSX-HSE-3 (57178) | Earth observation, tech experiments | 3U |
-| **Geoscan** | Geoscan-Edelveis (53385) ⚠ deorbited | Platform test, propulsion | 3U |
+| **Geoscan** | Vizard-ion (61749) | VERA plasma propulsion test, ionosphere radio occultation | 3U |
 | **SINP MSU** | Monitor-2 (57184) | X-ray / gamma observations | 3U |
 | **Space-Pi** | TUSUR GO (61782), RTU MIREA-1 (61785), Horizont (61757), ASRTU-1 (61781) | Educational, scientific | 3U |
 
@@ -181,13 +204,17 @@ For full architectural documentation with Mermaid diagrams, see **[ARCHITECTURE.
 | Method | URL | Description |
 |---|---|---|
 | GET | `/api/satellites` | List of all 15 spacecraft with metadata |
+| GET | `/api/health` | Backend liveness + cache status |
 | GET | `/api/positions` | Current ECI coordinates of all spacecraft |
 | GET | `/api/tle?source=embedded\|celestrak` | TLE data (embedded or from CelesTrak) |
+| GET | `/api/tle/status` | CelesTrak cache status |
 | POST | `/api/tle/refresh` | Force refresh TLE cache from CelesTrak |
 | GET | `/api/orbit/{norad_id}` | Orbital track (120 points, 60s step) |
-| GET | `/api/links?comm_range_km=3000` | ISL with LOS check |
+| GET | `/api/orbits` | Batch orbital tracks |
+| GET | `/api/links?comm_range_km=2000` | ISL with LOS check |
 | GET | `/api/orbital-elements/{norad_id}` | Keplerian orbital elements |
-| GET | `/api/collisions` | Close approach predictions |
+| GET | `/api/collisions` | Real-TLE or virtual-Walker close approach predictions |
+| GET | `/api/optimize-planes` | Walker-δ optimizer |
 | POST | `/api/starai/chat` | StarAI — chat with JSON UI commands |
 | GET | `/api/config` | Initial frontend configuration |
 
@@ -196,8 +223,8 @@ For full architectural documentation with Mermaid diagrams, see **[ARCHITECTURE.
 ## Data Sources
 
 ### TLE (Two-Line Element)
-- **CelesTrak** — https://celestrak.org — automatic TLE loading for Russian spacecraft
-- Data is cached for 1 hour, with fallback to embedded data if service is unavailable
+- **CelesTrak** — https://celestrak.org — live TLE loading for Russian spacecraft
+- Data is cached for 1 hour, with fallback to an embedded demo orbital set if service is unavailable
 - Source switching via control panel (Embedded / CelesTrak)
 
 ### Earth Textures
@@ -213,7 +240,7 @@ For full architectural documentation with Mermaid diagrams, see **[ARCHITECTURE.
 
 ## Security & Ethics
 
-- All orbital data (TLE) from open public sources (CelesTrak)
+- Live orbital data comes from open public CelesTrak feeds; the embedded fallback is explicitly a demo orbital set
 - Earth textures used per NASA Media Usage Guidelines
 - 3D satellite models created independently (procedural Three.js generation)
 - All libraries have open MIT license

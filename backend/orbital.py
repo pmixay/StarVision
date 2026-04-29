@@ -13,9 +13,72 @@ from satellites import RUSSIAN_CUBESATS, SatelliteInfo, is_operational
 # ── Constants ──────────────────────────────────────────────────────
 EARTH_RADIUS_KM = 6371.0
 MU = 398600.4418            # km³/s² — Earth gravitational parameter
-J2 = 1.08263e-3             # second zonal harmonic
 DEG2RAD = math.pi / 180.0
 RAD2DEG = 180.0 / math.pi
+
+# ── Satrec cache ───────────────────────────────────────────────────
+# Building a Satrec from TLE strings is fast but not free, and /api/positions
+# rebuilds 17 of them on every poll. Cache by the exact (line1, line2) pair so
+# we hit the parser only when the TLE actually changes (e.g. CelesTrak refresh
+# brings new orbital elements). The dict is bounded by the number of distinct
+# TLE pairs the process sees during a session, which is small (catalog size +
+# CelesTrak refresh count).
+_SATREC_CACHE: Dict[Tuple[str, str], Satrec] = {}
+
+
+def _walker_layout(total: int, planes: int) -> tuple[int, int, int, int]:
+    """Return (effective_planes, base_per_plane, remainder, phase_factor)."""
+    total_satellites = max(1, int(total))
+    effective_planes = max(1, min(int(planes), total_satellites))
+    base_per_plane = total_satellites // effective_planes
+    remainder = total_satellites % effective_planes
+    phase_factor = max(1, effective_planes // 2) if effective_planes > 1 else 0
+    return effective_planes, base_per_plane, remainder, phase_factor
+
+
+def _walker_slot(index: int, total: int, planes: int) -> tuple[int, int, int, int, int]:
+    """Return (effective_planes, phase_factor, plane_idx, sat_in_plane, sats_in_plane)."""
+    effective_planes, base_per_plane, remainder, phase_factor = _walker_layout(total, planes)
+    safe_index = max(0, min(int(index), max(1, int(total)) - 1))
+    larger_plane_size = base_per_plane + 1
+    larger_block_size = remainder * larger_plane_size
+
+    if safe_index < larger_block_size:
+        plane_idx = safe_index // larger_plane_size
+        sat_in_plane = safe_index % larger_plane_size
+        sats_in_plane = larger_plane_size
+    else:
+        smaller_index = safe_index - larger_block_size
+        plane_idx = remainder + (smaller_index // base_per_plane)
+        sat_in_plane = smaller_index % base_per_plane
+        sats_in_plane = base_per_plane
+
+    return effective_planes, phase_factor, plane_idx, sat_in_plane, sats_in_plane
+
+
+def _virtual_eci(index: int, total: int, altitude_km: float, sim_time_sec: float,
+                 planes: int = 1, inclination_deg: float = 55.0) -> tuple[float, float, float]:
+    """Shared Walker-δ virtual-orbit generator, mirrored with frontend/src/lib/orbital.ts."""
+    a = EARTH_RADIUS_KM + altitude_km
+    n = math.sqrt(MU / (a * a * a))
+    effective_planes, phase_factor, plane_idx, sat_in_plane, sats_in_plane = _walker_slot(index, total, planes)
+    raan = (plane_idx / effective_planes) * 2 * math.pi
+    phase = (sat_in_plane / sats_in_plane) * 2 * math.pi + ((phase_factor * plane_idx) / effective_planes) * ((2 * math.pi) / sats_in_plane)
+    mean_anomaly = n * sim_time_sec + phase
+
+    x_orb = a * math.cos(mean_anomaly)
+    y_orb = a * math.sin(mean_anomaly)
+    incl = inclination_deg * DEG2RAD
+    x_inc = x_orb
+    y_inc = y_orb * math.cos(incl)
+    z_inc = y_orb * math.sin(incl)
+    cos_r = math.cos(raan)
+    sin_r = math.sin(raan)
+    return (
+        x_inc * cos_r - y_inc * sin_r,
+        x_inc * sin_r + y_inc * cos_r,
+        z_inc,
+    )
 
 
 def _resolve_tle(
@@ -46,8 +109,18 @@ def _with_tle(sat: SatelliteInfo, tle1: str, tle2: str) -> SatelliteInfo:
 
 
 def tle_to_satrec(tle1: str, tle2: str) -> Satrec:
-    """Create SGP4 object from TLE lines."""
-    return Satrec.twoline2rv(tle1, tle2, WGS72)
+    """Return a cached Satrec for the given TLE pair, parsing on first miss.
+
+    Satrec is internally mutable (sgp4 stores propagation state on the object)
+    but `sgp4.api.Satrec.sgp4()` reads only the elements set during
+    twoline2rv, so concurrent callers can share the same instance safely.
+    """
+    key = (tle1, tle2)
+    cached = _SATREC_CACHE.get(key)
+    if cached is None:
+        cached = Satrec.twoline2rv(tle1, tle2, WGS72)
+        _SATREC_CACHE[key] = cached
+    return cached
 
 
 def propagate_satellite(sat_info: SatelliteInfo, dt: datetime) -> Dict[str, Any]:
@@ -237,6 +310,52 @@ def predict_collisions(
     return close_approaches
 
 
+def predict_virtual_collisions(
+    num_satellites: int,
+    altitude_km: float,
+    num_planes: int,
+    inclination_deg: float,
+    threshold_km: float = 100.0,
+    hours_ahead: float = 24.0,
+    step_sec: float = 60.0,
+) -> List[Dict[str, Any]]:
+    """Predict close approaches for the current virtual Walker constellation."""
+    dt_start = datetime.now(timezone.utc)
+    steps = max(1, int(hours_ahead * 3600 / step_sec))
+    pair_min: Dict[tuple, Dict[str, Any]] = {}
+
+    for step_i in range(steps + 1):
+        sim_time_sec = step_i * step_sec
+        dt = dt_start + timedelta(seconds=sim_time_sec)
+        positions = [
+            (idx, _virtual_eci(idx, num_satellites, altitude_km, sim_time_sec, num_planes, inclination_deg))
+            for idx in range(num_satellites)
+        ]
+        for i in range(len(positions)):
+            idx1, p1 = positions[i]
+            for j in range(i + 1, len(positions)):
+                idx2, p2 = positions[j]
+                dx = p1[0] - p2[0]
+                dy = p1[1] - p2[1]
+                dz = p1[2] - p2[2]
+                dist = math.sqrt(dx * dx + dy * dy + dz * dz)
+                key = (idx1, idx2)
+                if key not in pair_min or dist < pair_min[key]["min_distance_km"]:
+                    pair_min[key] = {
+                        "norad_id_1": 90000 + idx1,
+                        "name_1": f"VirtSat-{idx1 + 1}",
+                        "norad_id_2": 90000 + idx2,
+                        "name_2": f"VirtSat-{idx2 + 1}",
+                        "min_distance_km": round(dist, 2),
+                        "time_of_closest_approach": dt.isoformat(),
+                        "risk_level": "critical" if dist < 10 else "warning" if dist < threshold_km else "safe",
+                    }
+
+    results = [item for item in pair_min.values() if item["min_distance_km"] <= threshold_km]
+    results.sort(key=lambda x: x["min_distance_km"])
+    return results
+
+
 def optimize_plane_distribution(
     num_satellites: int,
     num_planes: int,
@@ -248,14 +367,7 @@ def optimize_plane_distribution(
     Returns Walker-delta constellation parameters: T/P/F.
     """
     T = num_satellites  # Total satellites
-    P = max(1, min(num_planes, T))  # Number of planes
-    S = T // P  # Satellites per plane (integer)
-    remainder = T % P
-    F = 1  # Phase factor (0..P-1), optimal for coverage is usually 1
-
-    # Optimal F for maximum coverage
-    if P > 1:
-        F = max(1, P // 2)
+    P, S, remainder, F = _walker_layout(T, num_planes)
 
     a = EARTH_RADIUS_KM + altitude_km
     period_sec = 2 * math.pi * math.sqrt(a**3 / MU)

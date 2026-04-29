@@ -20,7 +20,7 @@ import { getSimTime } from '../simClock';
 import { useStore } from '../hooks/useStore';
 import { CONSTELLATION_NAMES } from '../constants';
 import { selectRealSatellites } from '../selection';
-import { computeVirtualECI, EARTH_RADIUS_KM, SCENE_SCALE } from '../lib/orbital';
+import { computeVirtualECI, degToRad, EARTH_RADIUS_KM, SCENE_SCALE } from '../lib/orbital';
 import type { TLEData } from '../types';
 
 const SCALE = SCENE_SCALE;
@@ -32,11 +32,12 @@ function computeVirtualPositions(
   altitudeKm: number,
   simTimeMs: number,
   planes: number,
+  inclinationDeg: number,
 ): Array<{ x: number; y: number; z: number }> {
   const t = simTimeMs / 1000;
   const result: Array<{ x: number; y: number; z: number }> = new Array(count);
   for (let i = 0; i < count; i++) {
-    result[i] = computeVirtualECI(i, count, altitudeKm, t, planes);
+    result[i] = computeVirtualECI(i, count, altitudeKm, t, planes, degToRad(inclinationDeg));
   }
   return result;
 }
@@ -94,6 +95,7 @@ export function InterSatelliteLinks({ tleData, satelliteConstellations }: InterS
     activeConstellations,
     orbitAltitudeKm,
     orbitalPlanes,
+    inclinationDeg,
     setActiveLinksCount,
   } = useStore();
 
@@ -216,7 +218,7 @@ export function InterSatelliteLinks({ tleData, satelliteConstellations }: InterS
     let eciPositions: Array<{ norad_id: number; x: number; y: number; z: number }>;
 
     if (orbitAltitudeKm > 0) {
-      const virt = computeVirtualPositions(satelliteCount, orbitAltitudeKm, simTime, orbitalPlanes);
+      const virt = computeVirtualPositions(satelliteCount, orbitAltitudeKm, simTime, orbitalPlanes, inclinationDeg);
       eciPositions = virt
         .map((p, i) => ({
           norad_id: 90000 + i,

@@ -1,5 +1,4 @@
-import { useEffect, useMemo, useCallback, useRef } from 'react';
-import { Scene3D } from './components/Scene3D';
+import { lazy, Suspense, useEffect, useMemo, useCallback, useRef } from 'react';
 import { ControlPanel } from './components/ControlPanel';
 import { SatelliteInfoPanel } from './components/SatelliteInfoPanel';
 import { StarAIChat } from './components/StarAIChat';
@@ -17,6 +16,10 @@ import {
 import { getSimTime } from './simClock';
 import { CONSTELLATION_NAMES } from './constants';
 import { t } from './i18n';
+
+const Scene3D = lazy(() =>
+  import('./components/Scene3D').then((mod) => ({ default: mod.Scene3D })),
+);
 
 export default function App() {
   const {
@@ -218,12 +221,14 @@ export default function App() {
   return (
     <div className="relative w-full h-full">
       {/* 3D Canvas */}
-      <Scene3D
-        positions={positions}
-        tleData={tleData}
-        orbitPaths={orbitPaths}
-        satelliteConstellations={satelliteConstellations}
-      />
+      <Suspense fallback={<div className="absolute inset-0 bg-[#050a18]" />}>
+        <Scene3D
+          positions={positions}
+          tleData={tleData}
+          orbitPaths={orbitPaths}
+          satelliteConstellations={satelliteConstellations}
+        />
+      </Suspense>
 
       {/* Header */}
       <Header

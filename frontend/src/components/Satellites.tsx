@@ -7,15 +7,17 @@
  * - Model source: procedural Three.js (BoxGeometry + PlaneGeometry)
  */
 
-import { useRef, useMemo, useEffect, useCallback, useState, memo } from 'react';
+import { useRef, useMemo, useEffect, useCallback, memo } from 'react';
 import { useFrame } from '@react-three/fiber';
 import { Html } from '@react-three/drei';
-import { Vector3, Group } from 'three';
+import { Vector3, Group, DoubleSide } from 'three';
 import { twoline2satrec, propagate } from 'satellite.js';
 import { getSimTime, advanceSimTime } from '../simClock';
 import { CONSTELLATION_COLORS, CONSTELLATION_NAMES, CONSTELLATION_MODEL_TYPE } from '../constants';
 import { selectRealSatellites } from '../selection';
-import { circularOrbitPeriodSec, computeVirtualECI, SCENE_SCALE } from '../lib/orbital';
+import { circularOrbitPeriodSec, computeVirtualECI, degToRad, SCENE_SCALE } from '../lib/orbital';
+import { useStore } from '../hooks/useStore';
+import { t } from '../i18n';
 import type { SatellitePosition, OrbitPoint, TLEData } from '../types';
 
 const SCALE = SCENE_SCALE;
@@ -56,7 +58,7 @@ function CubeSat1U({ color, emissiveIntensity }: { color: string; emissiveIntens
           emissiveIntensity={0.4}
           metalness={0.3}
           roughness={0.7}
-          side={2}
+          side={DoubleSide}
         />
       </mesh>
       <mesh position={[-(panelW / 2 + size / 2), 0, 0]}>
@@ -67,7 +69,7 @@ function CubeSat1U({ color, emissiveIntensity }: { color: string; emissiveIntens
           emissiveIntensity={0.4}
           metalness={0.3}
           roughness={0.7}
-          side={2}
+          side={DoubleSide}
         />
       </mesh>
     </group>
@@ -109,7 +111,7 @@ function CubeSat3U({ color, emissiveIntensity }: { color: string; emissiveIntens
               emissiveIntensity={0.45}
               metalness={0.25}
               roughness={0.65}
-              side={2}
+              side={DoubleSide}
             />
           </mesh>
         ))
@@ -132,6 +134,14 @@ interface SatMarkerProps {
   getECI?: () => { x: number; y: number; z: number } | null;
 }
 
+// Hysteresis thresholds for the line-of-sight occlusion test (Earth radius = 1).
+// When a satellite skirts the limb at high simulation speed, a single binary
+// threshold flips on/off frame-by-frame and the label appears to flicker.
+// The two-threshold scheme requires the geometry to clearly cross either side
+// before changing the label state, which kills the boundary jitter.
+const LABEL_HIDE_DIST = 0.95;
+const LABEL_SHOW_DIST = 0.99;
+
 const SatMarker = memo(function SatMarker({
   name,
   constellation,
@@ -144,10 +154,13 @@ const SatMarker = memo(function SatMarker({
 }: SatMarkerProps) {
   const groupRef = useRef<Group>(null);
   const bodyRef = useRef<Group>(null);
-  const [labelVisible, setLabelVisible] = useState(true);
-  // Track visibility in a ref to avoid stale closure in setLabelVisible
-  const visibleRef = useRef(true);
-  const frameCountRef = useRef(0);
+  // Drive the label visibility through a DOM ref + opacity transition rather
+  // than React state so a flip near the horizon does not remount the drei
+  // <Html> portal — that remount is the actual visual "blink" users notice
+  // at high time-acceleration. The CSS transition smooths the fade and the
+  // ref tracks the current logical state for the hysteresis check below.
+  const labelDivRef = useRef<HTMLDivElement>(null);
+  const labelVisibleRef = useRef(true);
 
   const color = useMemo(() => getColor(constellation), [constellation]);
   const modelType = useMemo(() => getModelType(constellation), [constellation]);
@@ -168,26 +181,34 @@ const SatMarker = memo(function SatMarker({
         );
       }
     }
-    // Check if satellite is behind Earth (label occlusion) — throttled to every 10 frames
-    if (groupRef.current) {
-      frameCountRef.current++;
-      if (frameCountRef.current % 10 === 0) {
-        const satPos = groupRef.current.position;
-        const camPos = camera.position;
-        const dx = satPos.x - camPos.x;
-        const dy = satPos.y - camPos.y;
-        const dz = satPos.z - camPos.z;
-        const lenSq = dx * dx + dy * dy + dz * dz;
-        const t = Math.max(0, Math.min(1, -(camPos.x * dx + camPos.y * dy + camPos.z * dz) / lenSq));
-        const cx = camPos.x + t * dx;
-        const cy = camPos.y + t * dy;
-        const cz = camPos.z + t * dz;
+    // Earth-occlusion check for the satellite name. Run every frame — the
+    // math is a handful of multiplies and one sqrt; throttling it to every
+    // Nth frame is what introduced the flicker at high simulation speed
+    // (a fast-moving satellite could cross the horizon both ways inside
+    // a single throttle window).
+    if (showLabel && groupRef.current && labelDivRef.current) {
+      const satPos = groupRef.current.position;
+      const camPos = camera.position;
+      const dx = satPos.x - camPos.x;
+      const dy = satPos.y - camPos.y;
+      const dz = satPos.z - camPos.z;
+      const lenSq = dx * dx + dy * dy + dz * dz;
+      let nextVisible = labelVisibleRef.current;
+      if (lenSq > 0) {
+        const tParam = Math.max(0, Math.min(1, -(camPos.x * dx + camPos.y * dy + camPos.z * dz) / lenSq));
+        const cx = camPos.x + tParam * dx;
+        const cy = camPos.y + tParam * dy;
+        const cz = camPos.z + tParam * dz;
         const distToCenter = Math.sqrt(cx * cx + cy * cy + cz * cz);
-        const newVisible = distToCenter >= 0.95;
-        if (newVisible !== visibleRef.current) {
-          visibleRef.current = newVisible;
-          setLabelVisible(newVisible);
+        if (labelVisibleRef.current && distToCenter < LABEL_HIDE_DIST) {
+          nextVisible = false;
+        } else if (!labelVisibleRef.current && distToCenter > LABEL_SHOW_DIST) {
+          nextVisible = true;
         }
+      }
+      if (nextVisible !== labelVisibleRef.current) {
+        labelVisibleRef.current = nextVisible;
+        labelDivRef.current.style.opacity = nextVisible ? '1' : '0';
       }
     }
   });
@@ -212,8 +233,11 @@ const SatMarker = memo(function SatMarker({
         />
       </mesh>
 
-      {/* Подпись — hidden when behind Earth via manual occlusion check */}
-      {showLabel && labelVisible && (
+      {/* Label — kept mounted while showLabel is true; visibility is driven
+          via opacity through a DOM ref to avoid React remounts that would
+          otherwise blink the label whenever the satellite crosses the
+          Earth horizon. */}
+      {showLabel && (
         <Html
           position={[0, 0.05, 0]}
           center
@@ -225,7 +249,11 @@ const SatMarker = memo(function SatMarker({
           zIndexRange={[5, 0]}
           style={{ pointerEvents: 'none' }}
         >
-          <div className="sat-label" style={{ color }}>
+          <div
+            ref={labelDivRef}
+            className="sat-label"
+            style={{ color, opacity: 1, transition: 'opacity 160ms ease-out' }}
+          >
             {name}
             {isSelected && (
               <div style={{ fontSize: '8px', opacity: 0.7 }}>
@@ -275,6 +303,7 @@ function VirtualOrbitLine({
   color,
   opacity = 0.2,
   planes = 1,
+  inclinationDeg = 55,
 }: {
   index: number;
   total: number;
@@ -282,6 +311,7 @@ function VirtualOrbitLine({
   color: string;
   opacity?: number;
   planes?: number;
+  inclinationDeg?: number;
 }) {
   const positions = useMemo(() => {
     const steps = 128;
@@ -289,13 +319,13 @@ function VirtualOrbitLine({
     const period = circularOrbitPeriodSec(altitudeKm);
     for (let i = 0; i < steps; i++) {
       const t = (i / steps) * period;
-      const { x, y, z } = computeVirtualECI(index, total, altitudeKm, t, planes);
+      const { x, y, z } = computeVirtualECI(index, total, altitudeKm, t, planes, degToRad(inclinationDeg));
       arr[i * 3] = x * SCALE;
       arr[i * 3 + 1] = z * SCALE;
       arr[i * 3 + 2] = -y * SCALE;
     }
     return arr;
-  }, [index, total, altitudeKm, planes]);
+  }, [index, total, altitudeKm, planes, inclinationDeg]);
 
   return (
     <line>
@@ -322,6 +352,7 @@ interface SatellitesProps {
   satelliteCount: number;
   orbitAltitudeKm: number;
   orbitalPlanes: number;
+  inclinationDeg: number;
   timeSpeed: number;
 }
 
@@ -339,8 +370,10 @@ export function Satellites({
   satelliteCount,
   orbitAltitudeKm,
   orbitalPlanes,
+  inclinationDeg,
   timeSpeed,
 }: SatellitesProps) {
+  const lang = useStore((s) => s.lang);
   // ── Client-side SGP4: initialize satrec objects ───────────────────
   const satrecsRef = useRef<Map<number, ReturnType<typeof twoline2satrec>>>(new Map());
 
@@ -370,11 +403,11 @@ export function Satellites({
     if (orbitAltitudeKm <= 0) return [];
     const allVirt = Array.from({ length: satelliteCount }, (_, i) => ({
       norad_id: 90000 + i,
-      name: `VirtSat-${i + 1}`,
+      name: t('virtual.name', lang, { index: i + 1 }),
       constellation: CONSTELLATION_NAMES[i % CONSTELLATION_NAMES.length],
     }));
     return allVirt.filter((sat) => activeConstellations.includes(sat.constellation));
-  }, [orbitAltitudeKm, satelliteCount, activeConstellations]);
+  }, [orbitAltitudeKm, satelliteCount, activeConstellations, lang]);
 
   // Real TLE mode: select N satellites uniformly. Backend already
   // excludes archival sats from `positions`, but we use the shared
@@ -390,8 +423,8 @@ export function Satellites({
   }, [positions, activeConstellations, satelliteConstellations, satelliteCount, orbitAltitudeKm]);
 
   // Store orbit params in a ref so getECI closures always read the latest values
-  const orbitParamsRef = useRef({ orbitAltitudeKm, virtualSatCount, orbitalPlanes });
-  orbitParamsRef.current = { orbitAltitudeKm, virtualSatCount, orbitalPlanes };
+  const orbitParamsRef = useRef({ orbitAltitudeKm, virtualSatCount, orbitalPlanes, inclinationDeg });
+  orbitParamsRef.current = { orbitAltitudeKm, virtualSatCount, orbitalPlanes, inclinationDeg };
 
   // Stable getECI factory: returns the same function reference for the same noradId
   const eciCacheRef = useRef<Record<number, () => { x: number; y: number; z: number } | null>>({});
@@ -405,11 +438,11 @@ export function Satellites({
     if (!eciCacheRef.current[noradId]) {
       eciCacheRef.current[noradId] = () => {
         const simTime = getSimTime();
-        const { orbitAltitudeKm: alt, virtualSatCount: vsc, orbitalPlanes: planes } = orbitParamsRef.current;
+        const { orbitAltitudeKm: alt, virtualSatCount: vsc, orbitalPlanes: planes, inclinationDeg: incl } = orbitParamsRef.current;
         // Virtual mode
         if (alt > 0) {
           const idx = noradId - 90000;
-          return computeVirtualECI(idx, vsc, alt, simTime / 1000, planes);
+          return computeVirtualECI(idx, vsc, alt, simTime / 1000, planes, degToRad(incl));
         }
         // Real TLE mode via satellite.js
         const satrec = satrecsRef.current.get(noradId);
@@ -427,7 +460,7 @@ export function Satellites({
     const simTime = getSimTime();
     if (orbitAltitudeKm > 0) {
       const idx = noradId - 90000;
-      const eci = computeVirtualECI(idx, Math.max(virtualSatCount, 1), orbitAltitudeKm, simTime / 1000, orbitalPlanes);
+      const eci = computeVirtualECI(idx, Math.max(virtualSatCount, 1), orbitAltitudeKm, simTime / 1000, orbitalPlanes, degToRad(inclinationDeg));
       return new Vector3(eci.x * SCALE, eci.z * SCALE, -eci.y * SCALE);
     }
     const p = positions.find((pos) => pos.norad_id === noradId);
@@ -487,7 +520,7 @@ export function Satellites({
       {/* ── Орбитальные треки (реальные TLE) ────────────── */}
       {showOrbits && orbitAltitudeKm === 0 &&
         Object.entries(orbitPaths).map(([id, path]) => {
-          const numId = parseInt(id);
+          const numId = parseInt(id, 10);
           const constellation = satelliteConstellations[numId] || '';
           if (!activeConstellations.includes(constellation)) return null;
           if (!filteredRealPositions.some((p) => p.norad_id === numId)) return null;
@@ -518,6 +551,7 @@ export function Satellites({
               color={color}
               opacity={isActive ? 0.6 : 0.2}
               planes={orbitalPlanes}
+              inclinationDeg={inclinationDeg}
             />
           );
         })}

@@ -208,8 +208,8 @@ RESPONSE FORMAT — strictly JSON:
 Russian CubeSats in the system (NORAD ID):
 - UniverSat program: Dekart (46493), NORBI (46494), NORBI-2 (57179), SamSat-Ionosphere (61784)
 - Bauman MSTU: Yarilo-1 (46490), UmKA-1 (57172), Yarilo-3 (57198)
-- SPUTNIX/HSE: CubeSX-HSE (47952), CubeSX-HSE-3 (57178)
-- Geoscan: Geoscan-Edelveis (53385, deorbited)
+- SPUTNIX: CubeSX-HSE (47952), CubeSX-HSE-3 (57178)
+- Geoscan: Vizard-ion (61749)
 - SINP MSU: Monitor-2 (57184)
 - Space-Pi: TUSUR GO (61782), RTU MIREA-1 (61785), Horizont (61757), ASRTU-1 (61781)
 
@@ -546,13 +546,13 @@ def _fallback_response(user_message: str, lang: str = "ru") -> Dict[str, Any]:
     if any(w in msg_lower for w in ["sputnix", "спутникс", "вшэ", "hse", "cubesx"]):
         return {
             "message": (
-                "CubeSX-HSE — a series of 3U CubeSats developed by SPUTNIX and HSE University. "
-                "CubeSX-HSE (NORAD 47952) and CubeSX-HSE-3 (NORAD 57178) carry experimental "
-                "cameras with Fresnel lenses and X-band transmitters. Showing CubeSX-HSE."
+                "SPUTNIX 3U CubeSats in the model: CubeSX-HSE (NORAD 47952) and CubeSX-HSE-3 "
+                "(NORAD 57178), both with experimental Fresnel-lens cameras and X-band downlinks. "
+                "Showing CubeSX-HSE."
                 if en else
-                "CubeSX-HSE — серия кубсатов 3U, разработанных SPUTNIX и ВШЭ. "
-                "CubeSX-HSE (NORAD 47952) и CubeSX-HSE-3 (NORAD 57178) несут экспериментальные "
-                "камеры на линзах Френеля и передатчики X-диапазона. Показываю CubeSX-HSE."
+                "Кубсаты SPUTNIX в модели: CubeSX-HSE (NORAD 47952) и CubeSX-HSE-3 (NORAD 57178) "
+                "с экспериментальными камерами на линзах Френеля и X-передатчиками. "
+                "Показываю CubeSX-HSE."
             ),
             "actions": [
                 {"type": "highlight_constellation", "name": "SPUTNIX"},
@@ -560,19 +560,21 @@ def _fallback_response(user_message: str, lang: str = "ru") -> Dict[str, Any]:
             ],
         }
 
-    # ── Geoscan ──────────────────────────────────────────
-    if any(w in msg_lower for w in ["геоскан", "эдельвейс", "geoscan", "edelveis"]):
+    # ── Geoscan / Vizard-ion ─────────────────────────────
+    if any(w in msg_lower for w in ["геоскан", "vizard", "визард", "vizard-ion", "geoscan"]):
         return {
             "message": (
-                "Geoscan-Edelveis is the first private nanosatellite from St. Petersburg (3U, ~4 kg). "
-                "Flight tests of the Geoscan-3U platform with a gas thruster by OKB Fakel. "
-                "NORAD 53385. Deorbited 2024-02-18 after 558 days in orbit. Showing."
+                "Vizard-ion is a 3U CubeSat by MSU-Standard on the Geoscan 3U platform "
+                "(NORAD 61749, launched 2024-11-04). It tests the VERA plasma propulsion "
+                "system and a GLONASS/GPS receiver for radio-occultation studies of the "
+                "ionosphere together with RTU MIREA-1. Showing."
                 if en else
-                "Геоскан-Эдельвейс — первый частный наноспутник из Санкт-Петербурга (3U, ~4 кг). "
-                "Лётные испытания платформы Геоскан-3U с газовым двигателем ОКБ «Факел». "
-                "NORAD 53385. Сведён с орбиты 2024-02-18 после 558 дней полёта. Показываю."
+                "Vizard-ion — кубсат 3U компании «МГУ-Стандарт» на платформе «Геоскан 3U» "
+                "(NORAD 61749, запуск 04.11.2024). Лётные испытания плазменного двигателя "
+                "VERA и приёмника ГЛОНАСС/GPS для радиозатменного зондирования ионосферы "
+                "совместно с RTU MIREA-1. Показываю."
             ),
-            "actions": [{"type": "focus_satellite", "norad_id": 53385}],
+            "actions": [{"type": "focus_satellite", "norad_id": 61749}],
         }
 
     # ── Monitor / SINP MSU ───────────────────────────────
@@ -594,18 +596,18 @@ def _fallback_response(user_message: str, lang: str = "ru") -> Dict[str, Any]:
         return {
             "message": (
                 "Space-Pi is a Russian educational CubeSat program. Our model includes:\n"
-                "• TUSUR GO (NORAD 61782) — Tomsk\n"
-                "• RTU MIREA-1 (NORAD 61785) — Moscow\n"
-                "• Horizont (NORAD 61757)\n"
-                "• ASRTU-1 (NORAD 61781)\n"
-                "All launched 2024-11-05 into SSO ~550 km. Showing Space-Pi."
+                "• TUSUR GO (NORAD 61782) — Tomsk (2024-11-05)\n"
+                "• RTU MIREA-1 (NORAD 61785) — Moscow (2024-11-05)\n"
+                "• Horizont (NORAD 61757) — 2024-11-05\n"
+                "• ASRTU-1 (NORAD 61781) — 2024-11-05\n"
+                "All on SSO ~550 km. Showing Space-Pi."
                 if en else
                 "Space-Pi — российская образовательная программа кубсатов. В нашей модели:\n"
-                "• TUSUR GO (NORAD 61782) — ТУСУР, Томск\n"
-                "• RTU MIREA-1 (NORAD 61785) — РТУ МИРЭА, Москва\n"
-                "• Горизонт (NORAD 61757)\n"
-                "• ASRTU-1 (NORAD 61781)\n"
-                "Все запущены 2024-11-05 на ССО ~550 км. Показываю Space-Pi."
+                "• TUSUR GO (NORAD 61782) — ТУСУР, Томск (05.11.2024)\n"
+                "• RTU MIREA-1 (NORAD 61785) — РТУ МИРЭА, Москва (05.11.2024)\n"
+                "• Горизонт (NORAD 61757) — 05.11.2024\n"
+                "• ASRTU-1 (NORAD 61781) — 05.11.2024\n"
+                "Все на ССО ~550 км. Показываю Space-Pi."
             ),
             "actions": [{"type": "highlight_constellation", "name": "Space-Pi"}],
         }
@@ -730,13 +732,13 @@ def _fallback_response(user_message: str, lang: str = "ru") -> Dict[str, Any]:
             }
         return {
             "message": (
-                "Currently the model displays up to 15 real Russian satellites. "
-                "You can change the count from 3 to 15 via the slider or tell me, "
+                "The catalog holds 15 real Russian operational CubeSats and that is also "
+                "the slider cap (3–15). Change the slider in the control panel or tell me, "
                 "e.g.: 'Set 10 satellites'."
                 if en else
-                "Сейчас в модели отображается до 15 реальных российских спутников. "
-                "Ты можешь изменить количество от 3 до 15 через ползунок или сказать мне, "
-                "например: «Установи 10 спутников»."
+                "В каталоге 15 реальных действующих российских кубсатов — это же и предел "
+                "ползунка (3–15). Меняй ползунок в панели управления или скажи, например: "
+                "«Установи 10 спутников»."
             ),
             "actions": [],
         }
@@ -856,7 +858,7 @@ def _fallback_response(user_message: str, lang: str = "ru") -> Dict[str, Any]:
             "умка": 57172, "umka": 57172, "умка-1": 57172,
             "cubesx-hse-3": 57178, "cubesx-3": 57178,
             "cubesx-hse": 47952, "cubesx": 47952,
-            "геоскан": 53385, "эдельвейс": 53385, "geoscan": 53385, "edelveis": 53385,
+            "vizard-ion": 61749, "визард-ион": 61749, "vizard ion": 61749, "vizard": 61749,
             "монитор": 57184, "monitor": 57184,
             "самсат": 61784, "samsat": 61784, "ионосфер": 61784,
             "tusur": 61782, "тусур": 61782,

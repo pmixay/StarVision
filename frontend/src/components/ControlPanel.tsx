@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useStore } from '../hooks/useStore';
 import { t, tConstellation } from '../i18n';
+import { getWalkerLayout } from '../lib/orbital';
 import { fetchTLE, refreshTLE, ApiError } from '../services/api';
 import { CONSTELLATION_COLORS } from '../constants';
 
@@ -26,6 +27,7 @@ export function ControlPanel() {
     orbitAltitudeKm, setOrbitAltitudeKm,
     commRangeKm, setCommRangeKm,
     orbitalPlanes, setOrbitalPlanes,
+    inclinationDeg, setInclinationDeg,
     setTleData,
     setTleMeta,
     pushToast,
@@ -36,7 +38,7 @@ export function ControlPanel() {
 
   const [tleLoading, setTleLoading] = useState(false);
 
-  const _applyTleResponse = (
+  const applyTleResponse = (
     requested: 'embedded' | 'celestrak',
     res: Awaited<ReturnType<typeof fetchTLE>>,
     opts: { refreshed?: boolean } = {},
@@ -60,19 +62,19 @@ export function ControlPanel() {
       pushToast({
         level: 'warning',
         title: t('event.tlePartial', lang),
-        detail: `${res.meta.fallback_count} / ${res.meta.total} embedded`,
+        detail: `${res.meta.fallback_count} / ${res.meta.total} ${t('source.demoShort', lang)}`,
       });
       logEvent({
         level: 'warning',
         kind: 'tle_fallback',
         message: t('event.tlePartial', lang),
-        details: `${res.meta.fallback_count}/${res.meta.total}`,
+        details: `${res.meta.fallback_count}/${res.meta.total} ${t('source.demoShort', lang)}`,
       });
     } else if (opts.refreshed) {
       pushToast({
         level: 'success',
         title: t('event.tleRefreshed', lang),
-        detail: `${res.meta.live_count}/${res.meta.total} live`,
+        detail: `${res.meta.live_count}/${res.meta.total} ${t('source.liveShort', lang)}`,
       });
       logEvent({
         level: 'success',
@@ -95,7 +97,7 @@ export function ControlPanel() {
     setTleLoading(true);
     try {
       const res = await fetchTLE(source);
-      _applyTleResponse(source, res);
+      applyTleResponse(source, res);
     } catch (err) {
       const detail = err instanceof ApiError ? err.detail : String(err);
       pushToast({
@@ -115,7 +117,7 @@ export function ControlPanel() {
     setTleLoading(true);
     try {
       const res = await refreshTLE();
-      _applyTleResponse('celestrak', res, { refreshed: true });
+      applyTleResponse('celestrak', res, { refreshed: true });
     } catch (err) {
       const detail = err instanceof ApiError ? err.detail : String(err);
       pushToast({
@@ -132,6 +134,10 @@ export function ControlPanel() {
   const planesWord = lang === 'ru'
     ? (orbitalPlanes === 1 ? t('control.plane_one', lang) : orbitalPlanes < 5 ? t('control.plane_few', lang) : t('control.plane_many', lang))
     : t(orbitalPlanes === 1 ? 'control.plane_one' : 'control.plane_many', lang);
+  const walkerLayout = getWalkerLayout(satelliteCount, orbitalPlanes);
+  const satsPerPlaneLabel = walkerLayout.remainderSatellites > 0
+    ? `${walkerLayout.baseSatellitesPerPlane + 1}/${walkerLayout.baseSatellitesPerPlane}`
+    : `${walkerLayout.baseSatellitesPerPlane}`;
 
   return (
     <div
@@ -192,7 +198,7 @@ export function ControlPanel() {
           <span className="text-star-200">
             {orbitAltitudeKm === 0
               ? t('control.realTLE', lang)
-              : `${orbitAltitudeKm} ${lang === 'ru' ? 'км' : 'km'}`}
+          : `${orbitAltitudeKm} ${t('unit.km', lang)}`}
           </span>
         </label>
         <div className="flex items-center gap-2">
@@ -213,13 +219,13 @@ export function ControlPanel() {
           />
         </div>
         <div className="flex justify-between text-[10px] text-star-700 font-mono mt-0.5">
-          <span>400 {lang === 'ru' ? 'км' : 'km'}</span>
+          <span>400 {t('unit.km', lang)}</span>
           <span>1200</span>
-          <span>2000 {lang === 'ru' ? 'км' : 'km'}</span>
+          <span>2000 {t('unit.km', lang)}</span>
         </div>
         {orbitAltitudeKm > 0 && (
           <p className="text-[9px] text-star-600 font-mono mt-1">
-            {t('control.circularOrbits', lang)}: {satelliteCount} {t('header.spacecraft', lang)}, {orbitalPlanes} {planesWord}, 55°
+            {t('control.circularOrbits', lang)}: {satelliteCount} {t('header.spacecraft', lang)}, {orbitalPlanes} {planesWord}, {inclinationDeg.toFixed(0)}°
           </p>
         )}
       </div>
@@ -268,11 +274,11 @@ export function ControlPanel() {
               </p>
             ) : tleMeta.effective_source === 'celestrak_partial' ? (
               <p className="text-[9px] text-amber-300 font-mono mt-1">
-                ⚠ {tleMeta.live_count}/{tleMeta.total} live, {tleMeta.fallback_count} embedded
+                ⚠ {tleMeta.live_count}/{tleMeta.total} {t('source.liveShort', lang)}, {tleMeta.fallback_count} {t('source.demoShort', lang)}
               </p>
             ) : (
               <p className="text-[9px] text-green-400 font-mono mt-1">
-                ● {tleMeta.live_count}/{tleMeta.total} live
+                ● {tleMeta.live_count}/{tleMeta.total} {t('source.liveShort', lang)}
               </p>
             )
           )}
@@ -288,25 +294,46 @@ export function ControlPanel() {
           <input
             type="range"
             min={1}
-            max={7}
+            max={Math.min(7, satelliteCount)}
             step={1}
             value={orbitalPlanes}
             onChange={(e) => setOrbitalPlanes(Number(e.target.value))}
           />
           <div className="flex justify-between text-[10px] text-star-700 font-mono mt-0.5">
             <span>1</span>
-            <span>7</span>
+            <span>{Math.min(7, satelliteCount)}</span>
           </div>
           <p className="text-[9px] text-star-600 font-mono mt-1">
-            Walker-δ {satelliteCount}/{orbitalPlanes}/{orbitalPlanes > 1 ? Math.max(1, Math.floor(orbitalPlanes / 2)) : 0}: {Math.ceil(satelliteCount / orbitalPlanes)} {t('control.scPerPlane', lang)}
+            Walker-δ {satelliteCount}/{walkerLayout.effectivePlanes}/{walkerLayout.phaseFactor}: {satsPerPlaneLabel} {t('control.scPerPlane', lang)}
           </p>
+        </div>
+      )}
+
+      {orbitAltitudeKm > 0 && (
+        <div className="mb-4">
+          <label className="block text-xs text-star-400 font-mono mb-2">
+            {t('optimizer.inclination', lang)}: <span className="text-star-200">{inclinationDeg.toFixed(0)}°</span>
+          </label>
+          <input
+            type="range"
+            min={0}
+            max={180}
+            step={1}
+            value={inclinationDeg}
+            onChange={(e) => setInclinationDeg(Number(e.target.value))}
+          />
+          <div className="flex justify-between text-[10px] text-star-700 font-mono mt-0.5">
+            <span>0°</span>
+            <span>90°</span>
+            <span>180°</span>
+          </div>
         </div>
       )}
 
       {/* Communication range */}
       <div className="mb-4">
         <label className="block text-xs text-star-400 font-mono mb-2">
-          {t('control.commRange', lang)}: <span className="text-star-200">{commRangeKm} {lang === 'ru' ? 'км' : 'km'}</span>
+          {t('control.commRange', lang)}: <span className="text-star-200">{commRangeKm} {t('unit.km', lang)}</span>
         </label>
         <input
           type="range"
@@ -319,7 +346,7 @@ export function ControlPanel() {
         <div className="flex justify-between text-[10px] text-star-700 font-mono mt-0.5">
           <span>50</span>
           <span>1000</span>
-          <span>2000 {lang === 'ru' ? 'км' : 'km'}</span>
+          <span>2000 {t('unit.km', lang)}</span>
         </div>
       </div>
 

@@ -1,6 +1,6 @@
-# StarVision v1.2 — CubeSat Constellation Digital Twin
+# StarVision v1.3 — CubeSat Constellation Digital Twin
 
-# StarVision v1.2 — Цифровой двойник группировки кубсатов
+# StarVision v1.3 — Цифровой двойник группировки кубсатов
 
 > **Hackathon: Digital Twins of Space Systems** | **Хакатон: Цифровые двойники космических систем**
 >
@@ -15,14 +15,14 @@
 ## Positioning / Позиционирование
 
 StarVision is an **interactive 3D prototype** of a digital twin for a Russian
-CubeSat constellation. It combines real open-data TLEs, a teaching-oriented
-Walker mode, inter-satellite-link visualisation, coverage footprints,
+CubeSat constellation. It combines live CelesTrak TLEs, an embedded demo
+orbital fallback, a teaching-oriented Walker mode, inter-satellite-link visualisation, coverage footprints,
 collision forecasting, and an AI-driven UI. It is **not** a production
 ground-segment control system; the value is analysis, education, and
 demonstration.
 
 StarVision — интерактивный 3D-прототип цифрового двойника группировки
-российских кубсатов. Он объединяет реальные открытые TLE, учебный
+российских кубсатов. Он объединяет live TLE с CelesTrak, встроенный demo/fallback набор, учебный
 Walker-режим, визуализацию межспутниковых связей, coverage, прогноз
 сближений и AI-управление интерфейсом. Это **не** промышленная система
 управления КА; ценность — анализ, обучение и демонстрация.
@@ -33,14 +33,14 @@ Walker-режим, визуализацию межспутниковых свя�
 
 | Requirement / Требование | Implementation / Реализация | Location / Где смотреть |
 |---|---|---|
-| 3–15 satellites in 3D | Slider 3..15 clamps at store level | [ControlPanel.tsx](frontend/src/components/ControlPanel.tsx), [useStore.ts](frontend/src/hooks/useStore.ts), [clamps.ts](frontend/src/lib/clamps.ts) |
+| 3–15 satellites in 3D | Slider 3..15 matches the 15-spacecraft catalog (uniform selection across constellations) | [ControlPanel.tsx](frontend/src/components/ControlPanel.tsx), [useStore.ts](frontend/src/hooks/useStore.ts), [clamps.ts](frontend/src/lib/clamps.ts) |
 | Orbital motion modeling | Client-side SGP4 via `satellite.js` + server-side python-sgp4 | [Satellites.tsx](frontend/src/components/Satellites.tsx), [orbital.py](backend/orbital.py) |
 | Inter-satellite links | Per-frame distance + Earth-shadow LOS, object pooling | [InterSatelliteLinks.tsx](frontend/src/components/InterSatelliteLinks.tsx) |
 | UI parameters (≥ 3) | Count, altitude (TLE or 400–2000 km), comm range 50–2000 km, speed, planes, coverage, labels, constellation filter | [ControlPanel.tsx](frontend/src/components/ControlPanel.tsx) |
 | Open data sources | CelesTrak TLE + embedded fallback with explicit meta | [celestrak.py](backend/celestrak.py), Header/MissionDashboard |
-| Performance | Throttled raycasting, object pool, adaptive DPR | See "Performance" section |
-| RU / EN interface | Full i18n across every user-facing string | [i18n.ts](frontend/src/i18n.ts) |
-| Public repo + README + licence | MIT-compatible license, RU/EN docs | [LICENSE](LICENSE), [docs/](docs/) |
+| Performance | Throttled raycasting, object pool, reduced per-frame work | See "Performance" section |
+| RU / EN interface | Full RU/EN coverage for active UI panels used in demo | [i18n.ts](frontend/src/i18n.ts) |
+| Public repo + README + licence | Unlicense, RU/EN docs | [LICENSE](LICENSE), [docs/](docs/) |
 | **Bonus: collision prediction** | `GET /api/collisions` with threshold + horizon | [orbital.py `predict_collisions`](backend/orbital.py), [CollisionPanel.tsx](frontend/src/components/CollisionPanel.tsx) |
 | **Bonus: plane optimisation** | Walker-δ optimiser, UI can apply result | [orbital.py `optimize_plane_distribution`](backend/orbital.py), [OptimizerPanel.tsx](frontend/src/components/OptimizerPanel.tsx) |
 | **Bonus: AI in UI** | StarAI whitelisted actions; clamps defend invalid values | [ai_assistant.py](backend/ai_assistant.py), [StarAIChat.tsx](frontend/src/components/StarAIChat.tsx) |
@@ -78,7 +78,7 @@ Walker-режим, визуализацию межспутниковых свя�
 
 **StarVision** is a digital twin of a Russian CubeSat constellation featuring:
 
-- Real-time 3D visualization of 3–15 satellites in orbit
+- Real-time 3D visualization of 3–15 satellites in orbit (15-spacecraft catalog cap)
 - Orbital motion modeling via SGP4 propagation (client-side `satellite.js`)
 - Dynamic inter-satellite link (ISL) visualization with Earth-shadow LOS checks
 - **Automatic TLE loading from CelesTrak** with source selection (embedded / live)
@@ -88,7 +88,7 @@ Walker-режим, визуализацию межспутниковых свя�
 
 **StarVision** — цифровой двойник группировки российских кубсатов:
 
-- 3D-визуализация 3–15 спутников на орбите в реальном времени
+- 3D-визуализация 3–15 спутников на орбите в реальном времени (каталог из 15 КА — это и есть лимит)
 - Моделирование орбитального движения через SGP4 (`satellite.js` на клиенте)
 - Динамические межспутниковые связи (МСС) с проверкой затенения Землёй
 - **Автоматическая подгрузка TLE с CelesTrak** с выбором источника данных
@@ -100,7 +100,7 @@ Walker-режим, визуализацию межспутниковых свя�
 
 ## Features / Возможности
 
-- **15 Russian spacecraft** catalog (14 active + 1 deorbited): Descartes, NORBI, Yarilo-1, CubeSX-HSE, UmKA-1, NORBI-2, CubeSX-HSE-3, Monitor-2, Yarilo-3, SamSat-Ionosphere, TUSUR GO, RTU MIREA-1, Horizont, ASRTU-1, Geoscan-Edelveis
+- **15 Russian spacecraft** catalog (all active, hard cap): Dekart, NORBI, Yarilo-1, CubeSX-HSE, UmKA-1, NORBI-2, CubeSX-HSE-3, Monitor-2, Yarilo-3, SamSat-Ionosphere, TUSUR GO, RTU MIREA-1, Horizont, ASRTU-1, Vizard-ion
 - **Client-side SGP4** via `satellite.js` — smooth per-frame animation
 - **Inter-satellite links (ISL)** — per-frame distance calculation with LOS check (Earth shadow)
 - **TLE source: embedded data or CelesTrak** — one-click switching
@@ -110,15 +110,16 @@ Walker-режим, визуализацию межспутниковых свя�
 - **StarAI** — built-in AI assistant (server-side OpenRouter API) with UI control commands
 - **Virtual Walker orbits** — configurable altitude (400–2000 km), 1–7 orbital planes
 - **Ground coverage zones** — real-time satellite footprint visualization
-- **Optimized rendering** — object pooling, throttled raycasting, adaptive DPR
+- **Optimized rendering** — object pooling, throttled raycasting, reduced per-frame recalculation
 
 ### Parameters / Параметры
 
 | Parameter / Параметр | Range / Диапазон | Description / Описание |
 |---|---|---|
 | Satellite count / Кол-во КА | 3–15 | Uniform selection from catalog / Равномерная выборка |
-| Orbit altitude / Высота орбиты | TLE / 400–2000 km | TLE = real data; otherwise virtual Walker / TLE = реальные; иначе виртуальные |
-| TLE source / Источник TLE | Embedded / CelesTrak | Demo data or live CelesTrak / Демо или актуальные |
+| Orbit altitude / Высота орбиты | TLE / 400–2000 km | TLE = live/demo source; otherwise virtual Walker / TLE = live/demo; иначе виртуальные |
+| TLE source / Источник TLE | Embedded / CelesTrak | Embedded demo set or live CelesTrak / Встроенный demo-набор или live CelesTrak |
+| Inclination / Наклонение | 0–180° | Virtual Walker inclination / Наклонение виртуальной группировки |
 | Comm range / Дальность связи | 50–2,000 km | ISL visibility threshold / Порог видимости МСС |
 | Sim speed / Скорость | 1×–200× | Time acceleration / Ускорение времени |
 | ISL links / МСС | on/off | Show/hide inter-satellite links / Показать/скрыть МСС |
@@ -153,10 +154,9 @@ Measurements taken with 15 satellites, ISL links enabled, orbital tracks visible
 |---|---|
 | Object pooling (Three.js geometries/materials) | Reduces GC pauses, stable frame times / Снижение пауз GC |
 | Client-side SGP4 (`satellite.js`) | Eliminates network latency per frame / Без сетевой задержки |
-| Adaptive DPR (device pixel ratio) | Auto-adjusts resolution to maintain target FPS / Автоподстройка разрешения |
 | Throttled ISL recalculation | LOS checks every 2nd frame on low-end devices / Проверки LOS через кадр |
 | Shared `simClock` | Single time source — no redundant Date.now() calls / Единый источник времени |
-| Instanced rendering for orbit tracks | One draw call per constellation / Один draw call на группировку |
+| Batched orbit prefetch | One backend orbit-batch request instead of N orbit requests / Один пакетный запрос вместо N |
 
 ### Test Stand / Стенд для замеров
 
@@ -209,6 +209,19 @@ See **[ARCHITECTURE.md](ARCHITECTURE.md)** for full architectural documentation 
 
 ### Backend / Бэкенд
 
+PowerShell:
+
+```powershell
+cd backend
+python -m venv venv
+.\venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+Copy-Item .env.example .env
+uvicorn main:app --reload --port 8000
+```
+
+macOS / Linux:
+
 ```bash
 cd backend
 python -m venv venv
@@ -219,6 +232,16 @@ uvicorn main:app --reload --port 8000
 ```
 
 ### Frontend / Фронтенд
+
+PowerShell:
+
+```powershell
+cd frontend
+npm install
+npm run dev
+```
+
+macOS / Linux:
 
 ```bash
 cd frontend
@@ -236,10 +259,10 @@ Frontend auto-proxies `/api/*` to `localhost:8000` (configured in `vite.config.t
 
 | Constellation / Группировка | Satellites / Спутники | Purpose / Назначение | Form factor / Форм-фактор |
 |---|---|---|---|
-| **UniverSat / УниверСат** | Descartes (46493), NORBI (46494), NORBI-2 (57179), SamSat-Ionosphere (61784) | EO, AIS, radiation, ionosphere / ДЗЗ, AIS, радиация, ионосфера | 3U / 6U |
+| **UniverSat / УниверСат** | Dekart (46493), NORBI (46494), NORBI-2 (57179), SamSat-Ionosphere (61784) | EO, AIS, radiation, ionosphere / ДЗЗ, AIS, радиация, ионосфера | 3U / 6U |
 | **Bauman MSTU / МГТУ Баумана** | Yarilo-1 (46490), UmKA-1 (57172), Yarilo-3 (57198) | Solar physics, tech demo / Солнечная физика, технодемо | 1.5U / 3U |
 | **SPUTNIX** | CubeSX-HSE (47952), CubeSX-HSE-3 (57178) | Earth observation, experiments / ДЗЗ, эксперименты | 3U |
-| **Geoscan / Геоскан** | Geoscan-Edelveis (53385) ⚠ deorbited / деорбитирован | Platform test, propulsion / Испытание платформы | 3U |
+| **Geoscan / Геоскан** | Vizard-ion (61749) | VERA plasma thruster, ionosphere radio occultation / Двигатель VERA, радиозатменное зондирование | 3U |
 | **SINP MSU / НИИЯФ МГУ** | Monitor-2 (57184) | X-ray/gamma observations / Рентген/гамма | 3U |
 | **Space-Pi** | TUSUR GO (61782), RTU MIREA-1 (61785), Horizont (61757), ASRTU-1 (61781) | Educational, scientific / Образовательные, научные | 3U |
 
@@ -308,11 +331,13 @@ StarVision/
 | GET | `/api/satellites` | List of all 15 spacecraft / Список всех 15 КА |
 | GET | `/api/positions` | Current ECI coordinates (operational only) / Позиции |
 | GET | `/api/tle?source=embedded\|celestrak` | TLE + meta (effective source, live/fallback counts) |
+| GET | `/api/tle/status` | CelesTrak cache status / Статус кэша |
 | POST | `/api/tle/refresh` | Force refresh TLE cache from CelesTrak |
 | GET | `/api/orbit/{norad_id}` | Orbital track — 409 for archival / трек, 409 для архивных |
+| GET | `/api/orbits` | Batch orbit tracks / пакетные орбитальные треки |
 | GET | `/api/links?comm_range_km=2000` | ISL with LOS check, 50–2000 km range |
 | GET | `/api/orbital-elements/{norad_id}` | Keplerian elements — 409 for archival |
-| GET | `/api/collisions` | Close approach predictions / Прогноз сближений |
+| GET | `/api/collisions` | Close approaches for real TLE or current virtual Walker params / Прогноз сближений |
 | GET | `/api/optimize-planes` | Walker-δ optimiser / Оптимизатор Walker |
 | POST | `/api/starai/chat` | StarAI chat with JSON UI commands / Чат StarAI |
 | GET | `/api/config` | Initial frontend config / Конфигурация фронтенда |
@@ -322,8 +347,9 @@ StarVision/
 ## Data Sources / Источники данных
 
 ### TLE (Two-Line Element)
-- **CelesTrak** — https://celestrak.org — automatic TLE loading / автозагрузка TLE
-- Cached for 1 hour, fallback to embedded data / Кэш 1 час, fallback на встроенные данные
+- **CelesTrak** — https://celestrak.org — live TLE loading / live TLE
+- Embedded catalog in `backend/satellites.py` is a **demo fallback set** with realistic parameters and synthetic epochs for offline resilience / встроенный набор — demo fallback
+- Cached for 1 hour, fallback to embedded demo data / Кэш 1 час, fallback на demo-набор
 - Source switching via control panel / Переключение через панель управления
 
 ### Earth Textures / Текстуры Земли
@@ -339,7 +365,7 @@ StarVision/
 
 ## Security & Ethics / Безопасность и этика
 
-- All orbital data (TLE) from open public sources (CelesTrak)
+- Live orbital data sourced from open public CelesTrak feeds; embedded fallback is explicitly marked as a demo orbital set
 - Earth textures used per NASA Media Usage Guidelines
 - 3D satellite models created independently (procedural Three.js)
 - All libraries have open MIT license

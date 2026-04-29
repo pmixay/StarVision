@@ -3,15 +3,17 @@ main.py — StarVision Backend (FastAPI)
 Digital twin of a Russian CubeSat constellation.
 """
 
+import asyncio
 import logging
 import math
 import os
 import time
 from collections import deque
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from threading import Lock
-from typing import Deque, Dict, List, Optional
+from typing import AsyncIterator, Deque, Dict, List, Optional
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, Query, HTTPException, Request
@@ -26,7 +28,7 @@ from satellites import (
 )
 from orbital import (
     propagate_all, propagate_orbit_path,
-    get_orbital_elements, predict_collisions, optimize_plane_distribution,
+    get_orbital_elements, predict_collisions, predict_virtual_collisions, optimize_plane_distribution,
 )
 from ai_assistant import ask_starai
 from celestrak import (
@@ -46,10 +48,32 @@ ALLOWED_ORIGINS = [
     if o.strip()
 ]
 
+@asynccontextmanager
+async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    """Fire-and-forget CelesTrak prefetch so the very first user click on
+    "CelesTrak" finds the cache already populated, instead of waiting
+    ~10 s for the cold round-trip. Failure is logged and ignored — the
+    endpoint still works via embedded fallback.
+    """
+    async def _bg():
+        try:
+            await fetch_celestrak_tle()
+        except Exception:
+            logging.getLogger(__name__).exception("CelesTrak warm-up failed")
+
+    task = asyncio.create_task(_bg())
+    try:
+        yield
+    finally:
+        if not task.done():
+            task.cancel()
+
+
 app = FastAPI(
     title="StarVision API",
     description="Digital twin API for Russian CubeSat constellation",
-    version="1.2.0",
+    version="1.3.0",
+    lifespan=_lifespan,
 )
 
 app.add_middleware(
@@ -59,24 +83,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
-@app.on_event("startup")
-async def _warm_celestrak_cache() -> None:
-    """Fire-and-forget CelesTrak prefetch so the very first user click on
-    "CelesTrak" finds the cache already populated, instead of waiting
-    ~10 s for the cold round-trip. Failure is logged and ignored — the
-    endpoint still works via embedded fallback.
-    """
-    import asyncio as _asyncio
-
-    async def _bg():
-        try:
-            await fetch_celestrak_tle()
-        except Exception:
-            logging.getLogger(__name__).exception("CelesTrak warm-up failed")
-
-    _asyncio.create_task(_bg())
 
 
 # ── Request models ──────────────────────────────────────────────────
@@ -243,7 +249,7 @@ def _filter_operational(positions: list) -> list:
 async def root():
     return {
         "project": "StarVision",
-        "version": "1.2.0",
+        "version": "1.3.0",
         "description": "Цифровой двойник группировки российских кубсатов",
     }
 
@@ -533,20 +539,51 @@ async def get_collisions(
     threshold_km: float = Query(default=100.0, ge=1.0, le=1000.0),
     hours_ahead: float = Query(default=24.0, ge=1.0, le=168.0),
     source: str = Query(default="embedded", pattern="^(embedded|celestrak)$"),
+    mode: str = Query(default="real", pattern="^(real|virtual)$"),
+    satellite_count: int = Query(default=12, ge=3, le=15),
+    altitude_km: float = Query(default=550.0, ge=400.0, le=2000.0),
+    planes: int = Query(default=3, ge=1, le=7),
+    inclination_deg: float = Query(default=55.0, ge=0.0, le=180.0),
 ):
     """
     Predict potential collisions between satellites.
     Returns pairs with minimum distance <= threshold_km over hours_ahead period.
     ?source=embedded|celestrak — TLE data source.
     """
-    tle_override, meta = await _get_tle_override(source)
-    approaches = predict_collisions(threshold_km, hours_ahead, tle_override=tle_override)
+    if mode == "virtual":
+        effective_planes = max(1, min(planes, satellite_count))
+        approaches = predict_virtual_collisions(
+            num_satellites=satellite_count,
+            altitude_km=altitude_km,
+            num_planes=effective_planes,
+            inclination_deg=inclination_deg,
+            threshold_km=threshold_km,
+            hours_ahead=hours_ahead,
+        )
+        meta = {
+            "requested_source": "virtual",
+            "effective_source": "virtual",
+            "fallback": False,
+            "error": None,
+        }
+        source_label = "virtual"
+    else:
+        tle_override, meta = await _get_tle_override(source)
+        approaches = predict_collisions(threshold_km, hours_ahead, tle_override=tle_override)
+        source_label = meta["effective_source"]
     return {
         "close_approaches": approaches,
         "count": len(approaches),
         "threshold_km": threshold_km,
         "hours_ahead": hours_ahead,
-        "source": meta["effective_source"],
+        "source": source_label,
+        "mode": mode,
+        "params": {
+            "satellite_count": satellite_count,
+            "altitude_km": altitude_km,
+            "planes": effective_planes,
+            "inclination_deg": inclination_deg,
+        } if mode == "virtual" else None,
         "meta": meta,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
