@@ -3,7 +3,7 @@ import { useStore } from '../hooks/useStore';
 import { t, tConstellation } from '../i18n';
 import { getSimTime } from '../simClock';
 import { CONSTELLATION_NAMES } from '../constants';
-import { computeVirtualECI, EARTH_RADIUS_KM, EARTH_MU_KM3_S2 } from '../lib/orbital';
+import { computeVirtualECI, degToRad, eciLongitudeDegAtTime, EARTH_RADIUS_KM, EARTH_MU_KM3_S2 } from '../lib/orbital';
 import type { SatelliteData, SatellitePosition } from '../types';
 
 interface SatelliteInfoPanelProps {
@@ -14,7 +14,7 @@ interface SatelliteInfoPanelProps {
 export function SatelliteInfoPanel({ satellites, positions }: SatelliteInfoPanelProps) {
   const {
     lang, selectedSatellite, selectSatellite, focusSatellite,
-    orbitAltitudeKm, orbitalPlanes, satelliteCount, timeSpeed,
+    orbitAltitudeKm, orbitalPlanes, inclinationDeg, satelliteCount, timeSpeed,
     tleData, tleMeta,
   } = useStore();
 
@@ -27,21 +27,24 @@ export function SatelliteInfoPanel({ satellites, positions }: SatelliteInfoPanel
         const idx = selectedSatellite - 90000;
         return {
           norad_id: selectedSatellite,
-          name: `VirtSat-${idx + 1}`,
+          name: t('virtual.name', lang, { index: idx + 1 }),
           constellation: CONSTELLATION_NAMES[idx % CONSTELLATION_NAMES.length],
-          purpose: lang === 'en' ? 'Virtual satellite' : 'Виртуальный спутник',
+          purpose: t('virtual.purpose', lang),
           mass_kg: 0,
-          form_factor: 'Virtual',
+          form_factor: t('virtual.formFactor', lang),
           launch_date: '—',
           status: 'active',
-          description: lang === 'en'
-            ? `Virtual satellite on circular orbit at ${orbitAltitudeKm} km altitude, ${orbitalPlanes} orbital planes, ${satelliteCount} total S/C.`
-            : `Виртуальный спутник на круговой орбите высотой ${orbitAltitudeKm} км, ${orbitalPlanes} плоскостей, ${satelliteCount} КА.`,
+          description: t('virtual.description', lang, {
+            altitude: orbitAltitudeKm,
+            planes: orbitalPlanes,
+            inclination: inclinationDeg,
+            count: satelliteCount,
+          }),
         } as SatelliteData;
       }
       return satellites.find((s) => s.norad_id === selectedSatellite);
     },
-    [satellites, selectedSatellite, isVirtual, orbitAltitudeKm, orbitalPlanes, satelliteCount, lang]
+    [satellites, selectedSatellite, isVirtual, orbitAltitudeKm, orbitalPlanes, inclinationDeg, satelliteCount, lang]
   );
 
   const satPos = useMemo(
@@ -67,16 +70,17 @@ export function SatelliteInfoPanel({ satellites, positions }: SatelliteInfoPanel
     const interval = setInterval(() => {
       const idx = selectedSatellite - 90000;
       const a = EARTH_RADIUS_KM + orbitAltitudeKm;
-      const simTimeSec = getSimTime() / 1000;
-      const { x, y, z } = computeVirtualECI(idx, satelliteCount, orbitAltitudeKm, simTimeSec, orbitalPlanes);
+      const simTimeMs = getSimTime();
+      const simTimeSec = simTimeMs / 1000;
+      const { x, y, z } = computeVirtualECI(idx, satelliteCount, orbitAltitudeKm, simTimeSec, orbitalPlanes, degToRad(inclinationDeg));
       const speed = Math.sqrt(EARTH_MU_KM3_S2 / a);
       const periodMin = (2 * Math.PI * Math.sqrt((a * a * a) / EARTH_MU_KM3_S2)) / 60;
       const r = Math.sqrt(x * x + y * y + z * z);
       const lat = Math.asin(z / r) * (180 / Math.PI);
-      const lon = Math.atan2(y, x) * (180 / Math.PI);
+      const lon = eciLongitudeDegAtTime(x, y, simTimeMs);
       setVirtualTelemetry({
         norad_id: selectedSatellite,
-        name: `VirtSat-${idx + 1}`,
+        name: t('virtual.name', lang, { index: idx + 1 }),
         eci: { x, y, z },
         velocity: { vx: 0, vy: 0, vz: 0 },
         altitude_km: orbitAltitudeKm,
@@ -84,19 +88,19 @@ export function SatelliteInfoPanel({ satellites, positions }: SatelliteInfoPanel
         period_min: periodMin,
         lat,
         lon,
-        timestamp: new Date(getSimTime()).toISOString(),
+        timestamp: new Date(simTimeMs).toISOString(),
       });
     }, intervalMs);
     return () => clearInterval(interval);
-  }, [isVirtual, selectedSatellite, orbitAltitudeKm, orbitalPlanes, satelliteCount, timeSpeed]);
+  }, [isVirtual, selectedSatellite, orbitAltitudeKm, orbitalPlanes, inclinationDeg, satelliteCount, timeSpeed, lang]);
 
   const effectivePos = isVirtual ? virtualTelemetry : satPos;
 
   if (!selectedSatellite || !satData) return null;
 
   const km = lang === 'ru' ? 'км' : 'km';
-  const kms = lang === 'ru' ? 'км/с' : 'km/s';
-  const min = lang === 'ru' ? 'мин' : 'min';
+  const kms = t('unit.kmps', lang);
+  const min = t('unit.min', lang);
   const kg = lang === 'ru' ? 'кг' : 'kg';
 
   return (
@@ -157,9 +161,10 @@ export function SatelliteInfoPanel({ satellites, positions }: SatelliteInfoPanel
             {(() => {
               const entry = tleData.find((x) => x.norad_id === satData.norad_id);
               const s = entry?.source ?? tleMeta?.effective_source ?? 'embedded';
-              if (s === 'celestrak') return 'CelesTrak';
-              if (s === 'embedded_fallback') return 'fallback';
-              return 'embedded';
+              if (s === 'celestrak') return t('source.liveLong', lang);
+              if (s === 'celestrak_partial') return t('source.partialLong', lang);
+              if (s === 'embedded_fallback') return t('source.demoFallbackLong', lang);
+              return t('source.demoLong', lang);
             })()}
           </span>
         )}

@@ -120,6 +120,7 @@ export interface AppState {
   commRangeKm: number;       // communication range threshold (50–2000 km per spec)
   activeLinksCount: number;  // current number of active ISL
   orbitalPlanes: number;     // number of orbital planes (1–7)
+  inclinationDeg: number;    // virtual constellation inclination (0–180 deg)
 
   // Data-trust metadata
   tleMeta: TleResponseMeta | null;
@@ -154,6 +155,7 @@ export interface AppState {
   setCommRangeKm: (km: number) => void;
   setActiveLinksCount: (count: number) => void;
   setOrbitalPlanes: (planes: number) => void;
+  setInclinationDeg: (deg: number) => void;
   setChatOpen: (open: boolean) => void;
   addChatMessage: (msg: ChatMessage) => void;
   setChatLoading: (loading: boolean) => void;
@@ -271,6 +273,8 @@ export interface APICollisionsResponse {
   threshold_km: number;
   hours_ahead: number;
   source: string;
+  mode?: 'real' | 'virtual' | string;
+  params?: Record<string, unknown>;
   timestamp: string;
 }
 

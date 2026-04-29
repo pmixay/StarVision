@@ -18,6 +18,9 @@ export const ORBIT_ALT_MAX_KM = 2000;
 export const ORBITAL_PLANES_MIN = 1;
 export const ORBITAL_PLANES_MAX = 7;
 
+export const INCLINATION_MIN_DEG = 0;
+export const INCLINATION_MAX_DEG = 180;
+
 export function clamp(value: number, lo: number, hi: number): number {
   if (!Number.isFinite(value)) return lo;
   return Math.max(lo, Math.min(hi, value));
@@ -43,4 +46,8 @@ export function clampOrbitAltitudeKm(n: number): number {
 
 export function clampOrbitalPlanes(n: number): number {
   return Math.round(clamp(n, ORBITAL_PLANES_MIN, ORBITAL_PLANES_MAX));
+}
+
+export function clampInclinationDeg(n: number): number {
+  return clamp(n, INCLINATION_MIN_DEG, INCLINATION_MAX_DEG);
 }

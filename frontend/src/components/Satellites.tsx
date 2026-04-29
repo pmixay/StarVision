@@ -15,7 +15,9 @@ import { twoline2satrec, propagate } from 'satellite.js';
 import { getSimTime, advanceSimTime } from '../simClock';
 import { CONSTELLATION_COLORS, CONSTELLATION_NAMES, CONSTELLATION_MODEL_TYPE } from '../constants';
 import { selectRealSatellites } from '../selection';
-import { circularOrbitPeriodSec, computeVirtualECI, SCENE_SCALE } from '../lib/orbital';
+import { circularOrbitPeriodSec, computeVirtualECI, degToRad, SCENE_SCALE } from '../lib/orbital';
+import { useStore } from '../hooks/useStore';
+import { t } from '../i18n';
 import type { SatellitePosition, OrbitPoint, TLEData } from '../types';
 
 const SCALE = SCENE_SCALE;
@@ -275,6 +277,7 @@ function VirtualOrbitLine({
   color,
   opacity = 0.2,
   planes = 1,
+  inclinationDeg = 55,
 }: {
   index: number;
   total: number;
@@ -282,6 +285,7 @@ function VirtualOrbitLine({
   color: string;
   opacity?: number;
   planes?: number;
+  inclinationDeg?: number;
 }) {
   const positions = useMemo(() => {
     const steps = 128;
@@ -289,13 +293,13 @@ function VirtualOrbitLine({
     const period = circularOrbitPeriodSec(altitudeKm);
     for (let i = 0; i < steps; i++) {
       const t = (i / steps) * period;
-      const { x, y, z } = computeVirtualECI(index, total, altitudeKm, t, planes);
+      const { x, y, z } = computeVirtualECI(index, total, altitudeKm, t, planes, degToRad(inclinationDeg));
       arr[i * 3] = x * SCALE;
       arr[i * 3 + 1] = z * SCALE;
       arr[i * 3 + 2] = -y * SCALE;
     }
     return arr;
-  }, [index, total, altitudeKm, planes]);
+  }, [index, total, altitudeKm, planes, inclinationDeg]);
 
   return (
     <line>
@@ -322,6 +326,7 @@ interface SatellitesProps {
   satelliteCount: number;
   orbitAltitudeKm: number;
   orbitalPlanes: number;
+  inclinationDeg: number;
   timeSpeed: number;
 }
 
@@ -339,8 +344,10 @@ export function Satellites({
   satelliteCount,
   orbitAltitudeKm,
   orbitalPlanes,
+  inclinationDeg,
   timeSpeed,
 }: SatellitesProps) {
+  const lang = useStore((s) => s.lang);
   // ── Client-side SGP4: initialize satrec objects ───────────────────
   const satrecsRef = useRef<Map<number, ReturnType<typeof twoline2satrec>>>(new Map());
 
@@ -370,11 +377,11 @@ export function Satellites({
     if (orbitAltitudeKm <= 0) return [];
     const allVirt = Array.from({ length: satelliteCount }, (_, i) => ({
       norad_id: 90000 + i,
-      name: `VirtSat-${i + 1}`,
+      name: t('virtual.name', lang, { index: i + 1 }),
       constellation: CONSTELLATION_NAMES[i % CONSTELLATION_NAMES.length],
     }));
     return allVirt.filter((sat) => activeConstellations.includes(sat.constellation));
-  }, [orbitAltitudeKm, satelliteCount, activeConstellations]);
+  }, [orbitAltitudeKm, satelliteCount, activeConstellations, lang]);
 
   // Real TLE mode: select N satellites uniformly. Backend already
   // excludes archival sats from `positions`, but we use the shared
@@ -390,8 +397,8 @@ export function Satellites({
   }, [positions, activeConstellations, satelliteConstellations, satelliteCount, orbitAltitudeKm]);
 
   // Store orbit params in a ref so getECI closures always read the latest values
-  const orbitParamsRef = useRef({ orbitAltitudeKm, virtualSatCount, orbitalPlanes });
-  orbitParamsRef.current = { orbitAltitudeKm, virtualSatCount, orbitalPlanes };
+  const orbitParamsRef = useRef({ orbitAltitudeKm, virtualSatCount, orbitalPlanes, inclinationDeg });
+  orbitParamsRef.current = { orbitAltitudeKm, virtualSatCount, orbitalPlanes, inclinationDeg };
 
   // Stable getECI factory: returns the same function reference for the same noradId
   const eciCacheRef = useRef<Record<number, () => { x: number; y: number; z: number } | null>>({});
@@ -405,11 +412,11 @@ export function Satellites({
     if (!eciCacheRef.current[noradId]) {
       eciCacheRef.current[noradId] = () => {
         const simTime = getSimTime();
-        const { orbitAltitudeKm: alt, virtualSatCount: vsc, orbitalPlanes: planes } = orbitParamsRef.current;
+        const { orbitAltitudeKm: alt, virtualSatCount: vsc, orbitalPlanes: planes, inclinationDeg: incl } = orbitParamsRef.current;
         // Virtual mode
         if (alt > 0) {
           const idx = noradId - 90000;
-          return computeVirtualECI(idx, vsc, alt, simTime / 1000, planes);
+          return computeVirtualECI(idx, vsc, alt, simTime / 1000, planes, degToRad(incl));
         }
         // Real TLE mode via satellite.js
         const satrec = satrecsRef.current.get(noradId);
@@ -427,7 +434,7 @@ export function Satellites({
     const simTime = getSimTime();
     if (orbitAltitudeKm > 0) {
       const idx = noradId - 90000;
-      const eci = computeVirtualECI(idx, Math.max(virtualSatCount, 1), orbitAltitudeKm, simTime / 1000, orbitalPlanes);
+      const eci = computeVirtualECI(idx, Math.max(virtualSatCount, 1), orbitAltitudeKm, simTime / 1000, orbitalPlanes, degToRad(inclinationDeg));
       return new Vector3(eci.x * SCALE, eci.z * SCALE, -eci.y * SCALE);
     }
     const p = positions.find((pos) => pos.norad_id === noradId);
@@ -518,6 +525,7 @@ export function Satellites({
               color={color}
               opacity={isActive ? 0.6 : 0.2}
               planes={orbitalPlanes}
+              inclinationDeg={inclinationDeg}
             />
           );
         })}

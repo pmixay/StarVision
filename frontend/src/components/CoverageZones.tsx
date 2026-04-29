@@ -14,7 +14,7 @@ import { twoline2satrec, propagate } from 'satellite.js';
 import { getSimTime } from '../simClock';
 import { useStore } from '../hooks/useStore';
 import { CONSTELLATION_COLORS, CONSTELLATION_NAMES } from '../constants';
-import { computeVirtualECI, EARTH_RADIUS_KM, SCENE_SCALE } from '../lib/orbital';
+import { computeVirtualECI, degToRad, EARTH_RADIUS_KM, SCENE_SCALE } from '../lib/orbital';
 import type { SatellitePosition, TLEData } from '../types';
 
 const R_E = EARTH_RADIUS_KM;
@@ -102,6 +102,7 @@ type CoverageItem = {
   virtualTotal?: number;
   virtualAltKm?: number;
   virtualPlanes?: number;
+  virtualInclinationDeg?: number;
 };
 
 function CoverageFootprint({ item, commRangeKm }: { item: CoverageItem; commRangeKm: number }) {
@@ -145,6 +146,7 @@ function CoverageFootprint({ item, commRangeKm }: { item: CoverageItem; commRang
         item.virtualAltKm,
         getSimTime() / 1000,
         item.virtualPlanes ?? 1,
+        degToRad(item.virtualInclinationDeg ?? 55),
       );
     } else if (satrec) {
       const pv = propagate(satrec, new Date(getSimTime()));
@@ -199,6 +201,7 @@ export function CoverageZones({ positions, tleData, satelliteConstellations }: C
   const satelliteCount = useStore((s) => s.satelliteCount);
   const orbitAltitudeKm = useStore((s) => s.orbitAltitudeKm);
   const orbitalPlanes = useStore((s) => s.orbitalPlanes);
+  const inclinationDeg = useStore((s) => s.inclinationDeg);
   const activeConstellations = useStore((s) => s.activeConstellations);
   const commRangeKm = useStore((s) => s.commRangeKm);
 
@@ -215,6 +218,7 @@ export function CoverageZones({ positions, tleData, satelliteConstellations }: C
           virtualTotal: satelliteCount,
           virtualAltKm: orbitAltitudeKm,
           virtualPlanes: orbitalPlanes,
+          virtualInclinationDeg: inclinationDeg,
         });
       }
       return virtualItems.slice(0, MAX_SATS);
@@ -247,7 +251,7 @@ export function CoverageZones({ positions, tleData, satelliteConstellations }: C
       color: getColor(satelliteConstellations[position.norad_id] ?? ''),
       position,
     }));
-  }, [activeConstellations, orbitAltitudeKm, orbitalPlanes, positions, satelliteConstellations, satelliteCount, tleData]);
+  }, [activeConstellations, orbitAltitudeKm, orbitalPlanes, inclinationDeg, positions, satelliteConstellations, satelliteCount, tleData]);
 
   if (!showCoverage || items.length === 0) return null;
 

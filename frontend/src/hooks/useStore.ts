@@ -7,6 +7,7 @@ import {
   clampCommRangeKm,
   clampOrbitAltitudeKm,
   clampOrbitalPlanes,
+  clampInclinationDeg,
 } from '../lib/clamps';
 
 let _highlightTimer: ReturnType<typeof setTimeout> | null = null;
@@ -15,6 +16,10 @@ const MAX_EVENTS = 80;
 const MAX_TOASTS = 4;
 let _idCounter = 0;
 const nextId = (prefix: string) => `${prefix}_${++_idCounter}_${Date.now()}`;
+
+function clampPlanesForSatelliteCount(planes: number, satelliteCount: number): number {
+  return Math.max(1, Math.min(clampOrbitalPlanes(planes), clampSatelliteCount(satelliteCount)));
+}
 
 export const useStore = create<AppState>((set, get) => ({
   // Language
@@ -44,6 +49,7 @@ export const useStore = create<AppState>((set, get) => ({
   commRangeKm: 2000,
   activeLinksCount: 0,
   orbitalPlanes: 3,
+  inclinationDeg: 55,
 
   // Trust / freshness
   tleMeta: null,
@@ -117,13 +123,24 @@ export const useStore = create<AppState>((set, get) => ({
         ? state.activeConstellations.filter((c) => c !== name)
         : [...state.activeConstellations, name],
     })),
-  setSatelliteCount: (count) => set({ satelliteCount: clampSatelliteCount(count) }),
+  setSatelliteCount: (count) =>
+    set((state) => {
+      const satelliteCount = clampSatelliteCount(count);
+      return {
+        satelliteCount,
+        orbitalPlanes: clampPlanesForSatelliteCount(state.orbitalPlanes, satelliteCount),
+      };
+    }),
   setTleSource: (source) => set({ tleSource: source }),
   setOrbitAltitudeKm: (km) => set({ orbitAltitudeKm: clampOrbitAltitudeKm(km) }),
   setCommRangeKm: (km) => set({ commRangeKm: clampCommRangeKm(km) }),
   setActiveLinksCount: (count) =>
     set({ activeLinksCount: Math.max(0, Math.floor(count) || 0) }),
-  setOrbitalPlanes: (planes) => set({ orbitalPlanes: clampOrbitalPlanes(planes) }),
+  setOrbitalPlanes: (planes) =>
+    set((state) => ({
+      orbitalPlanes: clampPlanesForSatelliteCount(planes, state.satelliteCount),
+    })),
+  setInclinationDeg: (deg) => set({ inclinationDeg: clampInclinationDeg(deg) }),
   setChatOpen: (open) => set({ chatOpen: open }),
   addChatMessage: (msg) =>
     set((state) => {
@@ -182,5 +199,6 @@ export const useStore = create<AppState>((set, get) => ({
       orbitAltitudeKm: 0,
       commRangeKm: 2000,
       orbitalPlanes: 3,
+      inclinationDeg: 55,
     }),
 }));
