@@ -29,6 +29,7 @@ export function MissionDashboard({ displayedCount, activeCount }: MissionDashboa
     orbitAltitudeKm,
     satelliteCount,
     orbitalPlanes,
+    networkAnalytics,
   } = useStore();
 
   const mode = orbitAltitudeKm > 0
@@ -91,6 +92,36 @@ export function MissionDashboard({ displayedCount, activeCount }: MissionDashboa
       {tleMeta && (tleMeta.effective_source === 'embedded_fallback' || tleMeta.effective_source === 'celestrak_partial') && (
         <div className="mt-2 pt-2 border-t border-amber-500/20 text-[9px] text-amber-300 font-mono">
           ⚠ {tleMeta.fallback_count}/{tleMeta.total} fallback
+        </div>
+      )}
+      {networkAnalytics && (
+        <div className="mt-2 pt-2 border-t border-star-900/60 space-y-0.5">
+          <div className="text-[9px] text-star-600 font-mono uppercase tracking-wider mb-0.5">
+            {t('network.title', lang)}
+          </div>
+          <div className="flex justify-between text-[10px] font-mono">
+            <span className="text-star-500 uppercase">{t('network.components', lang)}</span>
+            <span className={networkAnalytics.is_connected ? 'text-green-400' : 'text-amber-400'}>
+              {networkAnalytics.connected_components}{' '}
+              {networkAnalytics.is_connected
+                ? t('network.connected', lang)
+                : t('network.partitioned', lang)}
+            </span>
+          </div>
+          <div className="flex justify-between text-[10px] font-mono">
+            <span className="text-star-500 uppercase">{t('network.largestComponent', lang)}</span>
+            <span className="text-star-200">{networkAnalytics.largest_component_size}</span>
+          </div>
+          <div className="flex justify-between text-[10px] font-mono">
+            <span className="text-star-500 uppercase">{t('network.avgDegree', lang)}</span>
+            <span className="text-star-200">{networkAnalytics.avg_degree.toFixed(2)}</span>
+          </div>
+          <div className="flex justify-between text-[10px] font-mono">
+            <span className="text-star-500 uppercase">{t('network.diameter', lang)}</span>
+            <span className="text-star-200">
+              {networkAnalytics.diameter == null ? '—' : networkAnalytics.diameter}
+            </span>
+          </div>
         </div>
       )}
     </div>

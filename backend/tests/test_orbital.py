@@ -165,10 +165,16 @@ class TestOptimizePlaneDistribution:
 
     def test_basic_output(self):
         result = optimize_plane_distribution(12, 3, 550.0, 55.0)
-        assert result["walker_notation"] == "12/3/1"
+        # F is now selected by the coverage objective rather than a
+        # constant, so we assert the structural invariants instead of
+        # a fixed F value. T/P stay as requested; F lies in [0, P-1].
         assert result["total_satellites"] == 12
         assert result["num_planes"] == 3
         assert result["sats_per_plane"] == 4
+        assert 0 <= result["phase_factor"] <= 2
+        assert result["walker_notation"] == f"12/3/{result['phase_factor']}"
+        assert "objective" in result
+        assert 0.0 <= result["objective"]["score"] <= 1.0
 
     def test_orbital_period(self):
         result = optimize_plane_distribution(12, 3, 550.0, 55.0)

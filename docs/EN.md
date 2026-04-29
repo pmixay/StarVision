@@ -75,7 +75,7 @@ Measurements taken with 15 satellites, ISL links enabled, orbital tracks visible
 | Adaptive DPR (device pixel ratio) | Auto-adjusts resolution to maintain target FPS |
 | Throttled ISL recalculation | LOS checks every 2nd frame on low-end devices |
 | Shared `simClock` | Single time source — no redundant Date.now() calls |
-| Instanced rendering for orbit tracks | One draw call per constellation |
+| Pre-allocated `Line` pool for ISL | Reuses 120 BufferGeometry slots; no per-frame allocations |
 
 ### Test Stand
 
@@ -180,14 +180,19 @@ For full architectural documentation with Mermaid diagrams, see **[ARCHITECTURE.
 
 | Method | URL | Description |
 |---|---|---|
-| GET | `/api/satellites` | List of all 15 spacecraft with metadata |
-| GET | `/api/positions` | Current ECI coordinates of all spacecraft |
-| GET | `/api/tle?source=embedded\|celestrak` | TLE data (embedded or from CelesTrak) |
+| GET | `/api/health` | Liveness + catalog summary + CelesTrak cache age |
+| GET | `/api/satellites` | List of all spacecraft (operational + archival) |
+| GET | `/api/satellites/{norad_id}` | Single spacecraft metadata |
+| GET | `/api/positions` | Current ECI/geo coordinates (operational only) |
+| GET | `/api/tle?source=embedded\|celestrak` | TLE + meta block (effective source, live/fallback counts) |
+| GET | `/api/tle/status` | TLE cache snapshot (age, TTL, last error) |
 | POST | `/api/tle/refresh` | Force refresh TLE cache from CelesTrak |
-| GET | `/api/orbit/{norad_id}` | Orbital track (120 points, 60s step) |
-| GET | `/api/links?comm_range_km=3000` | ISL with LOS check |
-| GET | `/api/orbital-elements/{norad_id}` | Keplerian orbital elements |
+| GET | `/api/orbit/{norad_id}` | Orbital track — 409 for archival satellites |
+| GET | `/api/orbits` | Batch orbital tracks for all operational satellites |
+| GET | `/api/links?comm_range_km=2000` | ISL with LOS check + connectivity analytics (50–2000 km) |
+| GET | `/api/orbital-elements/{norad_id}` | Keplerian elements — 409 for archival |
 | GET | `/api/collisions` | Close approach predictions |
+| GET | `/api/optimize-planes` | Walker-δ T/P/F optimiser with coverage objective |
 | POST | `/api/starai/chat` | StarAI — chat with JSON UI commands |
 | GET | `/api/config` | Initial frontend configuration |
 

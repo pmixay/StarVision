@@ -7,6 +7,8 @@ import {
   clampCommRangeKm,
   clampOrbitAltitudeKm,
   clampOrbitalPlanes,
+  clampOrbitInclinationDeg,
+  ORBIT_INCLINATION_DEFAULT_DEG,
 } from '../lib/clamps';
 
 let _highlightTimer: ReturnType<typeof setTimeout> | null = null;
@@ -44,12 +46,14 @@ export const useStore = create<AppState>((set, get) => ({
   commRangeKm: 2000,
   activeLinksCount: 0,
   orbitalPlanes: 3,
+  orbitInclinationDeg: ORBIT_INCLINATION_DEFAULT_DEG,
 
   // Trust / freshness
   tleMeta: null,
   backendHealth: null,
   backendReachable: true,
   lastHealthCheckAt: null,
+  networkAnalytics: null,
 
   // Events & toasts
   events: [],
@@ -124,6 +128,7 @@ export const useStore = create<AppState>((set, get) => ({
   setActiveLinksCount: (count) =>
     set({ activeLinksCount: Math.max(0, Math.floor(count) || 0) }),
   setOrbitalPlanes: (planes) => set({ orbitalPlanes: clampOrbitalPlanes(planes) }),
+  setOrbitInclinationDeg: (deg) => set({ orbitInclinationDeg: clampOrbitInclinationDeg(deg) }),
   setChatOpen: (open) => set({ chatOpen: open }),
   addChatMessage: (msg) =>
     set((state) => {
@@ -141,6 +146,7 @@ export const useStore = create<AppState>((set, get) => ({
   setTleMeta: (meta) => set({ tleMeta: meta }),
   setBackendHealth: (health, reachable) =>
     set({ backendHealth: health, backendReachable: reachable, lastHealthCheckAt: Date.now() }),
+  setNetworkAnalytics: (n) => set({ networkAnalytics: n }),
   logEvent: (event) =>
     set((state) => {
       const next: AppEvent = {
@@ -182,5 +188,6 @@ export const useStore = create<AppState>((set, get) => ({
       orbitAltitudeKm: 0,
       commRangeKm: 2000,
       orbitalPlanes: 3,
+      orbitInclinationDeg: ORBIT_INCLINATION_DEFAULT_DEG,
     }),
 }));

@@ -133,12 +133,14 @@ export function StarAIChat() {
     }
   }, [chatMessages]);
 
-  const executeActions = (actions: any[]) => {
+  const executeActions = (actions: unknown[]) => {
     if (!Array.isArray(actions)) return;
     const rejected: string[] = [];
     // Cap identical to the backend so UI can't be flooded.
     for (const raw of actions.slice(0, 8)) {
-      const { action, reason } = sanitizeAction(raw ?? {}, satellites);
+      const candidate: Record<string, unknown> =
+        raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
+      const { action, reason } = sanitizeAction(candidate, satellites);
       if (!action) {
         if (reason) rejected.push(reason);
         continue;
@@ -257,6 +259,7 @@ export function StarAIChat() {
     return (
       <button
         onClick={() => setChatOpen(true)}
+        aria-label={t('chat.open', lang)}
         className="absolute bottom-6 right-6 z-20 group cursor-pointer animate-fade-in"
       >
         <div className="relative">
@@ -272,7 +275,7 @@ export function StarAIChat() {
 
   return (
     <div
-      className="absolute bottom-4 right-4 z-20 glass-panel w-96 animate-fade-in flex flex-col"
+      className="absolute bottom-4 right-4 z-20 glass-panel w-96 max-w-[92vw] animate-fade-in flex flex-col"
       style={{ height: '500px' }}
     >
       {/* Header */}
@@ -294,6 +297,7 @@ export function StarAIChat() {
         <div className="flex items-center gap-1">
           <button
             onClick={() => setChatOpen(false)}
+            aria-label={t('chat.close', lang)}
             className="text-star-500 hover:text-star-200 transition-colors w-7 h-7 rounded-full hover:bg-white/5 flex items-center justify-center"
           >
             ×
@@ -386,6 +390,7 @@ export function StarAIChat() {
           <button
             onClick={handleSend}
             disabled={chatLoading || !input.trim()}
+            aria-label={t('chat.send', lang)}
             className="btn-star px-3 py-2.5 text-xs disabled:opacity-30 disabled:cursor-not-allowed rounded-xl"
           >
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">

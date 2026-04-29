@@ -342,14 +342,19 @@ StarVision/
 
 | Метод | URL | Описание |
 |---|---|---|
-| GET | `/api/satellites` | Список всех 15 КА с метаданными |
-| GET | `/api/positions` | Текущие ECI-координаты всех КА |
-| GET | `/api/tle?source=embedded\|celestrak` | TLE-данные (встроенные или с CelesTrak) |
+| GET | `/api/health` | Состояние бэкенда, кэш CelesTrak, каталог |
+| GET | `/api/satellites` | Список всех КА (активные + архивные) |
+| GET | `/api/satellites/{norad_id}` | Метаданные конкретного КА |
+| GET | `/api/positions` | Текущие ECI/гео координаты (только операционные) |
+| GET | `/api/tle?source=embedded\|celestrak` | TLE + meta (effective_source, live/fallback) |
+| GET | `/api/tle/status` | Снапшот кэша TLE (возраст, TTL, ошибка) |
 | POST | `/api/tle/refresh` | Принудительное обновление TLE с CelesTrak |
-| GET | `/api/orbit/{norad_id}` | Орбитальный трек (120 точек, шаг 60с) |
-| GET | `/api/links?comm_range_km=3000` | МСС с LOS-проверкой |
-| GET | `/api/orbital-elements/{norad_id}` | Кеплеровы элементы орбиты |
+| GET | `/api/orbit/{norad_id}` | Орбитальный трек — 409 для архивных |
+| GET | `/api/orbits` | Батч-выгрузка треков всех операционных КА |
+| GET | `/api/links?comm_range_km=2000` | МСС + аналитика связности (50–2000 км) |
+| GET | `/api/orbital-elements/{norad_id}` | Кеплеровы элементы — 409 для архивных |
 | GET | `/api/collisions` | Прогноз сближений |
+| GET | `/api/optimize-planes` | Walker-δ T/P/F с целевой функцией покрытия |
 | POST | `/api/starai/chat` | StarAI — чат с JSON-командами UI |
 | GET | `/api/config` | Начальная конфигурация фронтенда |
 

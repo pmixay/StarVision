@@ -4,11 +4,11 @@ __pycache__/
 venv/
 .env
 
-# Node
+# Node — package-lock.json IS tracked so jury & CI get reproducible
+# installs (`npm ci`). Only generated artefacts are ignored.
 node_modules/
 dist/
 .vite/
-package-lock.json
 
 # IDE
 .vscode/

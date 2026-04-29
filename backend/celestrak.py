@@ -44,6 +44,21 @@ MIRROR_URLS = [
 
 # TLE data cache: norad_id -> (tle_line1, tle_line2)
 CACHE_TTL_SEC = 3600  # refresh every hour
+
+# Hard ceilings on the two-phase fetch wall-clock cost. httpx's per-
+# request connect timeout interacts with HTTP/2 and DNS retries in ways
+# that can stretch a cold "blocked host" fetch to tens of seconds.
+# Phase 1 (group endpoints + mirrors) must come back fast — group URLs
+# typically respond in <1 s; 5 s is generous and keeps the UI snappy
+# when the upstream is blocked. Phase 2 (per-NORAD CATNR lookups for
+# satellites missing from the groups) gets a longer budget because
+# individual lookups can stretch under rate-limit back-off.
+PHASE1_TIMEOUT_SEC = 5.0
+PHASE2_TIMEOUT_SEC = 8.0
+# Combined ceiling, exposed for tests and external callers that want to
+# reason about the total worst-case latency of a single fetch.
+FETCH_WALL_CLOCK_BUDGET_SEC = PHASE1_TIMEOUT_SEC + PHASE2_TIMEOUT_SEC
+
 _tle_cache: Dict[int, Tuple[str, str]] = {}
 _cache_timestamp: float = 0.0
 _cache_lock: asyncio.Lock = asyncio.Lock()
@@ -247,14 +262,14 @@ async def fetch_celestrak_tle(norad_ids: Optional[List[int]] = None) -> Dict[int
             ) as client:
                 # ── Phase 1: group endpoints + mirrors ─────────────────────
                 # Group URLs usually cover most CubeSats in a single response.
-                # Fetching only 3 URLs in parallel (vs the old 17) avoids
-                # triggering CelesTrak's per-IP rate limiter.
+                # Fetching only 3 URLs in parallel (vs ~17) avoids triggering
+                # CelesTrak's per-IP rate limiter.
                 phase1: list[asyncio.Task] = [
                     asyncio.create_task(_fetch_url(client, url))
                     for url in CELESTRAK_URLS + MIRROR_URLS
                 ]
                 logger.info("TLE phase 1: %d group/mirror requests", len(phase1))
-                done1, pending1 = await asyncio.wait(phase1, timeout=7.0)
+                done1, pending1 = await asyncio.wait(phase1, timeout=PHASE1_TIMEOUT_SEC)
                 for fut in pending1:
                     fut.cancel()
                     logger.warning("TLE phase 1 task cancelled (timeout)")
@@ -293,7 +308,7 @@ async def fetch_celestrak_tle(norad_ids: Optional[List[int]] = None) -> Dict[int
                         "TLE phase 2: %d per-NORAD lookups for missing satellites",
                         len(phase2),
                     )
-                    done2, pending2 = await asyncio.wait(phase2, timeout=10.0)
+                    done2, pending2 = await asyncio.wait(phase2, timeout=PHASE2_TIMEOUT_SEC)
                     for fut in pending2:
                         fut.cancel()
                         logger.warning("TLE phase 2 task cancelled (timeout)")
@@ -383,7 +398,7 @@ async def get_tle_by_source(source: str = "embedded") -> Dict[str, object]:
         "tle_data": [ {..., "source": "celestrak"|"embedded"|"embedded_fallback"}, ...],
         "meta": {
           "requested_source": "embedded" | "celestrak",
-          "effective_source": "embedded" | "celestrak" | "embedded_fallback",
+          "effective_source": "embedded" | "celestrak" | "celestrak_partial" | "embedded_fallback",
           "fallback": bool,      # True if we could not honor requested source fully
           "error": Optional[str], # Populated on network/parse failures
           ...cache_status
@@ -477,7 +492,7 @@ async def get_tle_by_source(source: str = "embedded") -> Dict[str, object]:
         if not result:
             effective = "embedded_fallback"
         elif any_fallback:
-            effective = "mixed"
+            effective = "celestrak_partial"
 
         return {
             "tle_data": result,

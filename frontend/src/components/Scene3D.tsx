@@ -9,36 +9,78 @@ import { Satellites } from './Satellites';
 import { InterSatelliteLinks } from './InterSatelliteLinks';
 import { CoverageZones } from './CoverageZones';
 import { useStore } from '../hooks/useStore';
+import { computeVirtualECI, SCENE_SCALE } from '../lib/orbital';
 import type { SatellitePosition, OrbitPoint, TLEData } from '../types';
 
-const EARTH_RADIUS = 6371.0;
-const MU = 398600.4418;
-const CAM_SCALE = 1 / EARTH_RADIUS;
+// ── Adaptive DPR ────────────────────────────────────────────────────
+// Measure FPS over a rolling 1 s window. When the median frame budget
+// stays above 22 ms (≈ 45 fps) we drop the renderer's pixel ratio one
+// step until either the framerate recovers or we hit DPR_MIN. We never
+// re-raise DPR mid-session — re-creating the WebGL framebuffer is
+// expensive and visible as a stutter, and the user cares about smooth
+// motion more than pixel sharpness once we've decided the GPU can't
+// keep up. The OG `dpr={[1, 1.5]}` advert in the README/ARCHITECTURE
+// claimed "adaptive DPR" but only set a static range — this is the
+// real thing.
+const DPR_STEPS = [1.5, 1.25, 1.0, 0.75];
+const FPS_TARGET = 45;
+const SAMPLES = 60;            // 1 s @60 fps
+const DROP_AFTER_BAD_WINDOWS = 2;
 
-// ── Helper: compute virtual orbit position ──────────────────────────
-function computeVirtualECI(index: number, total: number, altKm: number, simTimeSec: number, planes: number = 1) {
-  const a = EARTH_RADIUS + altKm;
-  const n = Math.sqrt(MU / (a * a * a));
-  const incl = (55 * Math.PI) / 180;
-  const P = Math.max(1, Math.min(planes, total));
-  const satsPerPlane = Math.ceil(total / P);
-  const planeIdx = index % P;
-  const satInPlane = Math.floor(index / P);
-  const raan = (planeIdx / P) * 2 * Math.PI;
-  // Walker-δ T/P/F: inter-plane phase offset for uniform coverage
-  const F = P > 1 ? Math.max(1, Math.floor(P / 2)) : 0;
-  const phase = (satInPlane / satsPerPlane) * 2 * Math.PI
-    + (F * planeIdx / P) * (2 * Math.PI / satsPerPlane);
-  const M = n * simTimeSec + phase;
-  const xOrb = a * Math.cos(M);
-  const yOrb = a * Math.sin(M);
-  const xInc = xOrb;
-  const yInc = yOrb * Math.cos(incl);
-  const zInc = yOrb * Math.sin(incl);
-  const cosR = Math.cos(raan);
-  const sinR = Math.sin(raan);
-  return { x: xInc * cosR - yInc * sinR, y: xInc * sinR + yInc * cosR, z: zInc };
+function AdaptiveDPR() {
+  const { gl } = useThree();
+  const dprIdxRef = useRef(0);
+  const frameTimesRef = useRef<number[]>([]);
+  const lastFrameRef = useRef(performance.now());
+  const consecutiveBadRef = useRef(0);
+
+  // Initialise to the highest DPR step. Honour devicePixelRatio so
+  // we don't oversample on high-DPI laptops (a 2× retina screen can
+  // happily run 1.5×, but driving it at the full 2× tanks framerate
+  // on integrated GPUs).
+  useEffect(() => {
+    const dpr = Math.min(DPR_STEPS[0], window.devicePixelRatio || 1);
+    gl.setPixelRatio(dpr);
+  }, [gl]);
+
+  useFrame(() => {
+    const now = performance.now();
+    const dt = now - lastFrameRef.current;
+    lastFrameRef.current = now;
+    const buf = frameTimesRef.current;
+    buf.push(dt);
+    if (buf.length < SAMPLES) return;
+    if (buf.length > SAMPLES) buf.splice(0, buf.length - SAMPLES);
+
+    // Use median frame time so a single GC pause doesn't drop DPR.
+    const sorted = [...buf].sort((a, b) => a - b);
+    const median = sorted[Math.floor(sorted.length / 2)];
+    const fps = 1000 / median;
+
+    if (fps < FPS_TARGET) {
+      consecutiveBadRef.current++;
+      if (
+        consecutiveBadRef.current >= DROP_AFTER_BAD_WINDOWS &&
+        dprIdxRef.current < DPR_STEPS.length - 1
+      ) {
+        dprIdxRef.current++;
+        const next = Math.min(
+          DPR_STEPS[dprIdxRef.current],
+          window.devicePixelRatio || 1,
+        );
+        gl.setPixelRatio(next);
+        consecutiveBadRef.current = 0;
+        frameTimesRef.current = [];
+      }
+    } else {
+      consecutiveBadRef.current = 0;
+    }
+  });
+
+  return null;
 }
+
+const CAM_SCALE = SCENE_SCALE;
 
 // ── Coordinate grid (equator + latitude circles), rotates with Earth
 function CoordinateGrid() {
@@ -106,10 +148,11 @@ interface CameraControllerProps {
   orbitAltitudeKm: number;
   satelliteCount: number;
   orbitalPlanes: number;
+  orbitInclinationDeg: number;
   controlsRef: React.RefObject<any>;
 }
 
-function CameraController({ tleData, orbitAltitudeKm, satelliteCount, orbitalPlanes, controlsRef }: CameraControllerProps) {
+function CameraController({ tleData, orbitAltitudeKm, satelliteCount, orbitalPlanes, orbitInclinationDeg, controlsRef }: CameraControllerProps) {
   const { camera } = useThree();
   const { focusedSatellite, selectedSatellite, cameraFollowing, setCameraFollowing } = useStore();
   const prevDistRef = useRef<number>(0);
@@ -152,7 +195,8 @@ function CameraController({ tleData, orbitAltitudeKm, satelliteCount, orbitalPla
     const simTime = getSimTime();
     if (orbitAltitudeKm > 0 && id >= 90000) {
       const idx = id - 90000;
-      const eci = computeVirtualECI(idx, satelliteCount, orbitAltitudeKm, simTime / 1000, orbitalPlanes);
+      const inclRad = (orbitInclinationDeg * Math.PI) / 180;
+      const eci = computeVirtualECI(idx, satelliteCount, orbitAltitudeKm, simTime / 1000, orbitalPlanes, inclRad);
       return new Vector3(eci.x * CAM_SCALE, eci.z * CAM_SCALE, -eci.y * CAM_SCALE);
     }
     const satrec = satrecsRef.current[id];
@@ -161,7 +205,7 @@ function CameraController({ tleData, orbitAltitudeKm, satelliteCount, orbitalPla
     if (!pv.position || typeof pv.position === 'boolean') return null;
     const pos = pv.position as { x: number; y: number; z: number };
     return new Vector3(pos.x * CAM_SCALE, pos.z * CAM_SCALE, -pos.y * CAM_SCALE);
-  }, [orbitAltitudeKm, satelliteCount, orbitalPlanes]);
+  }, [orbitAltitudeKm, satelliteCount, orbitalPlanes, orbitInclinationDeg]);
 
   // Start animation when focus or selection changes
   useEffect(() => {
@@ -272,6 +316,7 @@ function SceneContent({ positions, tleData, orbitPaths, satelliteConstellations 
     satelliteCount,
     orbitAltitudeKm,
     orbitalPlanes,
+    orbitInclinationDeg,
     selectSatellite,
   } = useStore();
 
@@ -292,12 +337,16 @@ function SceneContent({ positions, tleData, orbitPaths, satelliteConstellations 
         dampingFactor={0.05}
       />
 
+      {/* Adaptive DPR — drops pixel ratio one step when median FPS dips below the target. */}
+      <AdaptiveDPR />
+
       {/* Camera controller: satellite tracking */}
       <CameraController
         tleData={tleData}
         orbitAltitudeKm={orbitAltitudeKm}
         satelliteCount={satelliteCount}
         orbitalPlanes={orbitalPlanes}
+        orbitInclinationDeg={orbitInclinationDeg}
         controlsRef={controlsRef}
       />
 
@@ -332,6 +381,7 @@ function SceneContent({ positions, tleData, orbitPaths, satelliteConstellations 
         satelliteCount={satelliteCount}
         orbitAltitudeKm={orbitAltitudeKm}
         orbitalPlanes={orbitalPlanes}
+        orbitInclinationDeg={orbitInclinationDeg}
         timeSpeed={timeSpeed}
       />
 
@@ -365,7 +415,10 @@ export function Scene3D({ positions, tleData, orbitPaths, satelliteConstellation
       <Canvas
         gl={{ antialias: true, alpha: false }}
         style={{ background: '#050a18' }}
-        dpr={[1, 1.5]}
+        // dpr is managed dynamically by the AdaptiveDPR helper inside
+        // SceneContent; we still cap the initial value at 1.5 so the
+        // first frame doesn't oversample on retina laptops.
+        dpr={Math.min(1.5, typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1)}
       >
         <Suspense fallback={null}>
           <SceneContent
