@@ -23,11 +23,34 @@ def test_accepts_valid_actions():
     assert rejected == []
 
 
-def test_rejects_archival_norad():
-    actions = [{"type": "focus_satellite", "norad_id": 53385}]  # Geoscan-Edelveis (deorbited)
-    accepted, rejected = validate_actions(actions)
-    assert accepted == []
-    assert rejected and "archival" in rejected[0]
+def test_rejects_archival_norad(monkeypatch):
+    """Synthesise a deorbited satellite and verify the validator drops it.
+
+    The catalog currently has no deorbited entries, so the test injects one
+    via the catalog reference shared between satellites.py and ai_assistant
+    runtime helpers. This locks in the operational filter regardless of
+    whether the live catalog happens to ship an archival entry."""
+    from satellites import RUSSIAN_CUBESATS, SatelliteInfo
+
+    archival = SatelliteInfo(
+        norad_id=99001,
+        name="Test-Archival",
+        constellation="УниверСат",
+        purpose="archival regression",
+        mass_kg=1.0,
+        form_factor="3U",
+        launch_date="2023-06-27",
+        status="deorbited",
+    )
+    RUSSIAN_CUBESATS.append(archival)
+    try:
+        accepted, rejected = validate_actions([
+            {"type": "focus_satellite", "norad_id": 99001}
+        ])
+        assert accepted == []
+        assert rejected and "archival" in rejected[0]
+    finally:
+        RUSSIAN_CUBESATS.remove(archival)
 
 
 def test_rejects_unknown_norad():

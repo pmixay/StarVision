@@ -32,10 +32,11 @@ async def test_list_satellites(client):
     assert resp.status_code == 200
     data = resp.json()
     assert "satellites" in data
-    assert data["count"] == 15
-    assert len(data["satellites"]) == 15
-    assert data["operational_count"] == 14
-    assert data["archive_count"] == 1
+    # Catalog grew to 17 with no archival entries; see test_satellites.py
+    assert data["count"] == 17
+    assert len(data["satellites"]) == 17
+    assert data["operational_count"] == 17
+    assert data["archive_count"] == 0
     for sat in data["satellites"]:
         assert "operational" in sat
         assert sat["operational"] == (sat["status"] == "active")
@@ -86,9 +87,6 @@ async def test_get_tle_embedded(client):
     assert data["meta"]["requested_source"] == "embedded"
     assert data["meta"]["effective_source"] == "embedded"
     assert data["meta"]["fallback"] is False
-    # Archival satellite must not be included
-    norad_ids = [e["norad_id"] for e in data["tle_data"]]
-    assert 53385 not in norad_ids
 
 
 @pytest.mark.asyncio
@@ -103,24 +101,11 @@ async def test_get_positions(client):
     assert resp.status_code == 200
     data = resp.json()
     assert "positions" in data
-    assert len(data["positions"]) == 14  # 15 catalog - 1 archival
-    assert 53385 not in {p["norad_id"] for p in data["positions"]}
+    assert len(data["positions"]) == 17  # all catalog entries are operational
     pos = data["positions"][0]
     assert "eci" in pos
     assert "altitude_km" in pos
     assert "meta" in data
-
-
-@pytest.mark.asyncio
-async def test_orbit_archival_rejected(client):
-    resp = await client.get("/api/orbit/53385")
-    assert resp.status_code == 409
-
-
-@pytest.mark.asyncio
-async def test_orbital_elements_archival_rejected(client):
-    resp = await client.get("/api/orbital-elements/53385")
-    assert resp.status_code == 409
 
 
 @pytest.mark.asyncio
@@ -168,8 +153,8 @@ async def test_get_all_orbit_paths_batch(client):
         assert int(nid) > 0
         assert len(path) == 10
         assert {"x", "y", "z"} <= set(path[0].keys())
-    # Archival sats (e.g. 53385 Geoscan-Edelveis) must not appear.
-    assert "53385" not in data["paths"] and 53385 not in data["paths"]
+    # All 17 active satellites should be present in batch.
+    assert len(data["paths"]) == 17
 
 
 @pytest.mark.asyncio
