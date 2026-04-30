@@ -259,6 +259,52 @@ async def test_partial_fetch_marks_status_not_ok(monkeypatch):
     assert status["last_fetch_error"] is not None
 
 
+def test_satnogs_json_parser_extracts_valid_tles():
+    """The SatNOGS DB returns a JSON array of TLE entries with a
+    different shape than CelesTrak's plain-text format. The parser must
+    pull out NORAD ID, line1, line2 — and reject malformed lines via
+    the same `_is_tle_valid` check used for the text parser, so a
+    corrupted SatNOGS entry can't poison the cache.
+    """
+    import json
+
+    from celestrak import _parse_satnogs_json
+
+    # Use a real, well-formed TLE from the embedded catalog so the
+    # checksum + epoch validators accept it.
+    payload = json.dumps(
+        [
+            {
+                "tle0": "0 ДЕКАРТ",
+                "tle1": "1 46493U 20068H   26091.50000000  .00000450  00000-0  28000-4 0  9998",
+                "tle2": "2 46493  97.4100  90.0000 0011500  80.0000 280.0000 15.22000000 28003",
+                "norad_cat_id": 46493,
+            },
+            # Garbage entry — must be ignored, not crash the parser.
+            {"tle1": "not a tle", "tle2": "also not", "norad_cat_id": 99999},
+            # Missing fields — also ignored.
+            {"tle0": "incomplete"},
+        ]
+    )
+    parsed = _parse_satnogs_json(payload)
+    assert 46493 in parsed
+    assert 99999 not in parsed
+    assert parsed[46493][0].startswith("1 46493")
+
+
+def test_satnogs_json_parser_handles_non_array_payloads():
+    """A malformed JSON body (object / scalar / non-JSON) must produce
+    an empty dict rather than blow up the runner — bad upstream
+    responses should look like an empty source, not crash the fetch.
+    """
+    from celestrak import _parse_satnogs_json
+
+    assert _parse_satnogs_json("") == {}
+    assert _parse_satnogs_json("not json") == {}
+    assert _parse_satnogs_json('{"object": "not array"}') == {}
+    assert _parse_satnogs_json("[]") == {}
+
+
 @pytest.mark.asyncio
 async def test_bulk_first_lands_full_catalog_without_per_norad(monkeypatch):
     """The runner's primary path is now a single bulk GROUP fetch. When
@@ -270,7 +316,7 @@ async def test_bulk_first_lands_full_catalog_without_per_norad(monkeypatch):
 
     catnr_called = 0
 
-    async def fake_throttled(_client, url, _sem):
+    async def fake_throttled(_client, url, _sem, fmt="tle"):  # noqa: ARG001
         # Pretend the first bulk source carries every target sat. Real
         # CelesTrak GROUP responses contain hundreds of TLEs; the runner
         # filters to target_set, so a noisy payload is safe to fake.
@@ -307,7 +353,7 @@ async def test_per_norad_fillin_only_for_missing(monkeypatch):
     bulk_covers = set(live[:10])
     catnr_targets: list[str] = []
 
-    async def fake_throttled(_client, url, _sem):
+    async def fake_throttled(_client, url, _sem, fmt="tle"):  # noqa: ARG001
         if "GROUP=" in url:
             # First bulk delivers a subset; further bulks empty.
             if "GROUP=cubesat" in url:

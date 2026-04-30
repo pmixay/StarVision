@@ -25,26 +25,38 @@ logger = logging.getLogger(__name__)
 # the primary path.
 CELESTRAK_CATNR_URL = "https://celestrak.org/NORAD/elements/gp.php?CATNR={norad_id}&FORMAT=tle"
 
-# Bulk GROUP endpoints — single HTTP request returns dozens-to-thousands
-# of TLEs. One bulk request is far less likely to trip rate-limiting
-# than 15 parallel CATNR queries, so this is the preferred primary
-# strategy. Listed smallest-first so we pay only for the bytes we need:
-#   * `cubesat`   ~15 KB / ~90 sats (CubeSat catalog; Russian academic
-#                 missions show up here when CelesTrak tags them).
-#   * `amateur`   ~16 KB / ~95 sats (amateur-radio satellites; covers
-#                 most of the УниверСат / Space-Pi catalog whose
-#                 spacecraft carry amateur transponders).
-#   * `education` ~10 KB / ~50 sats (university missions).
-#   * `active`    ~1.7 MB / ~9000 sats — the full active catalog. Used
-#                 only as a last resort because every byte downloaded is
-#                 a byte the user pays for, and most groups above cover
-#                 our targets in a fraction of the size.
-CELESTRAK_GROUP_URLS = [
-    "https://celestrak.org/NORAD/elements/gp.php?GROUP=cubesat&FORMAT=tle",
-    "https://celestrak.org/NORAD/elements/gp.php?GROUP=amateur&FORMAT=tle",
-    "https://celestrak.org/NORAD/elements/gp.php?GROUP=education&FORMAT=tle",
-    "https://celestrak.org/NORAD/elements/gp.php?GROUP=active&FORMAT=tle",
+# Bulk endpoints — single HTTP request returns the entire TLE catalog
+# in one shot. One bulk request is far less likely to trip rate-limiting
+# than 15 parallel CATNR queries. Listed by reachability + coverage so
+# the most reliable, highest-coverage source is tried first.
+#
+# Each entry is `(url, parser)` so we can mix plain-TLE and JSON sources
+# under the same fetch pipeline. The parser converts the raw response
+# body into `{norad_id: (line1, line2)}`.
+#
+#   * SatNOGS DB     ~500 KB JSON of ~1500 sats. Open data, hosted on
+#                    *.satnogs.org infrastructure independent of
+#                    celestrak.org — so it stays reachable from networks
+#                    that have CelesTrak rate-limited or geo-blocked.
+#                    Covers our entire catalog (15/15) including the
+#                    non-amateur scientific missions.
+#   * CelesTrak `cubesat` group ~15 KB / ~90 sats.
+#   * CelesTrak `amateur` group ~16 KB / ~95 sats — covers most of the
+#                    УниверСат / Space-Pi catalog (their spacecraft
+#                    carry amateur transponders).
+#   * CelesTrak `education` group ~10 KB / ~50 sats.
+#   * CelesTrak `active`   ~1.7 MB / ~9000 sats — full active catalog,
+#                    last-resort because of the bandwidth cost.
+BULK_SOURCES: list[tuple[str, str]] = [
+    ("https://db.satnogs.org/api/tle/?format=json", "json"),
+    ("https://celestrak.org/NORAD/elements/gp.php?GROUP=cubesat&FORMAT=tle", "tle"),
+    ("https://celestrak.org/NORAD/elements/gp.php?GROUP=amateur&FORMAT=tle", "tle"),
+    ("https://celestrak.org/NORAD/elements/gp.php?GROUP=education&FORMAT=tle", "tle"),
+    ("https://celestrak.org/NORAD/elements/gp.php?GROUP=active&FORMAT=tle", "tle"),
 ]
+
+# Backwards-compatible alias for tests / external introspection.
+CELESTRAK_GROUP_URLS = [url for url, fmt in BULK_SOURCES if fmt == "tle"]
 
 # Mirror endpoints used as a redundant secondary feed. AMSAT publishes
 # amateur-band TLEs in plain TLE format and is reachable from networks
@@ -227,6 +239,43 @@ def _is_tle_valid(line1: str, line2: str, max_age_days: float = 365.0) -> bool:
     return True
 
 
+def _parse_satnogs_json(text: str) -> dict[int, tuple[str, str]]:
+    """Parse the SatNOGS DB `/api/tle/?format=json` response.
+
+    SatNOGS publishes a JSON array of `{tle0, tle1, tle2, norad_cat_id, ...}`
+    objects. Single request, ~500 KB, includes the full TLE catalog —
+    crucially, hosted on a different infrastructure than celestrak.org so
+    it stays reachable from networks that have CelesTrak rate-limited or
+    geo-blocked. We validate each line the same way as the plain-text
+    parser, so corrupted entries are skipped silently.
+    """
+    import json
+
+    try:
+        items = json.loads(text)
+    except (ValueError, json.JSONDecodeError):
+        return {}
+    if not isinstance(items, list):
+        return {}
+
+    result: dict[int, tuple[str, str]] = {}
+    for entry in items:
+        if not isinstance(entry, dict):
+            continue
+        line1 = entry.get("tle1")
+        line2 = entry.get("tle2")
+        norad_raw = entry.get("norad_cat_id") or entry.get("norad_id")
+        if not isinstance(line1, str) or not isinstance(line2, str):
+            continue
+        try:
+            norad_id = int(norad_raw) if norad_raw is not None else int(line1[2:7].strip())
+        except (TypeError, ValueError, IndexError):
+            continue
+        if _is_tle_valid(line1, line2):
+            result[norad_id] = (line1, line2)
+    return result
+
+
 def _parse_tle_text(text: str) -> dict[int, tuple[str, str]]:
     """Parse TLE-format text (3 lines per satellite: name, line1, line2).
     Validates each set — skips corrupted entries."""
@@ -390,17 +439,17 @@ async def _run_celestrak_fetch(
                 # both bandwidth and rate-limit budget for everyone.
                 bulk_sem = asyncio.Semaphore(CELESTRAK_BULK_CONCURRENCY)
                 bulk_tasks: list[asyncio.Task] = []
-                for url in CELESTRAK_GROUP_URLS:
+                for url, fmt in BULK_SOURCES:
                     bulk_tasks.append(
-                        asyncio.create_task(_fetch_url_throttled(client, url, bulk_sem))
+                        asyncio.create_task(_fetch_url_throttled(client, url, bulk_sem, fmt=fmt))
                     )
                 for url in MIRROR_URLS:
                     bulk_tasks.append(
-                        asyncio.create_task(_fetch_url_throttled(client, url, bulk_sem))
+                        asyncio.create_task(_fetch_url_throttled(client, url, bulk_sem, fmt="tle"))
                     )
                 logger.info(
                     "TLE fetch phase 1: %d bulk + %d mirror sources (target %d sats)",
-                    len(CELESTRAK_GROUP_URLS),
+                    len(BULK_SOURCES),
                     len(MIRROR_URLS),
                     len(norad_ids),
                 )
@@ -541,6 +590,7 @@ async def _fetch_url_throttled(
     client: httpx.AsyncClient,
     url: str,
     semaphore: asyncio.Semaphore,
+    fmt: str = "tle",
 ) -> tuple[dict[int, tuple[str, str]], str]:
     """Concurrency-capped wrapper around `_fetch_url`. The bulk + mirror
     sources are fanned out concurrently, but we still want to keep the
@@ -548,12 +598,13 @@ async def _fetch_url_throttled(
     saturate the upstream's per-IP connection limit.
     """
     async with semaphore:
-        return await _fetch_url(client, url)
+        return await _fetch_url(client, url, fmt=fmt)
 
 
 async def _fetch_url(
     client: httpx.AsyncClient,
     url: str,
+    fmt: str = "tle",
 ) -> tuple[dict[int, tuple[str, str]], str]:
     """Fetch and parse TLE from a single URL.
 
@@ -595,7 +646,8 @@ async def _fetch_url(
         return {}, "http"
 
     try:
-        parsed = _parse_tle_text(resp.text)
+        parser = _parse_satnogs_json if fmt == "json" else _parse_tle_text
+        parsed = parser(resp.text)
     except Exception:
         logger.warning("Failed to parse TLE response from %s", url, exc_info=True)
         return {}, "other"
