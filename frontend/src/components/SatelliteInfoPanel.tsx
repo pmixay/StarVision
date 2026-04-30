@@ -105,8 +105,8 @@ export function SatelliteInfoPanel({ satellites, positions }: SatelliteInfoPanel
 
   return (
     <div
-      className="glass-panel absolute top-16 right-4 w-80 max-w-[92vw] p-4 animate-slide-right z-10"
-      style={{ maxHeight: 'calc(100vh - 120px)', overflowY: 'auto' }}
+      className="glass-panel absolute top-24 sm:top-16 right-2 sm:right-4 left-2 sm:left-auto sm:w-80 sm:max-w-[92vw] p-4 animate-slide-right z-10"
+      style={{ maxHeight: 'calc(100vh - 140px)', overflowY: 'auto' }}
     >
       {/* Header */}
       <div className="flex items-center justify-between mb-3">

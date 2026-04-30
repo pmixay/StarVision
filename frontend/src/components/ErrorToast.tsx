@@ -21,7 +21,7 @@ function ToastCard({ toast }: { toast: AppToast }) {
 
   return (
     <div
-      className={`glass-panel ${style.border} ${style.glow} shadow-lg rounded-lg px-3 py-2 min-w-[260px] max-w-[380px] animate-slide-right`}
+      className={`glass-panel ${style.border} ${style.glow} shadow-lg rounded-lg px-3 py-2 w-full sm:min-w-[260px] sm:max-w-[380px] animate-slide-right`}
     >
       <div className="flex items-start gap-2">
         <span className={`mt-1 w-2 h-2 rounded-full flex-shrink-0 ${style.dot}`} />
@@ -51,7 +51,7 @@ export function ErrorToast() {
   const toasts = useStore((s) => s.toasts);
   if (toasts.length === 0) return null;
   return (
-    <div className="absolute top-20 right-4 z-30 flex flex-col gap-2 pointer-events-auto">
+    <div className="absolute top-24 sm:top-20 right-2 sm:right-4 left-2 sm:left-auto z-30 flex flex-col gap-2 pointer-events-auto">
       {toasts.map((t) => (
         <ToastCard key={t.id} toast={t} />
       ))}

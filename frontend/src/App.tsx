@@ -242,8 +242,11 @@ export default function App() {
       <ControlPanel />
       <SatelliteInfoPanel satellites={satellites} positions={positions} />
 
-      {/* Engineering panels — docked on the right, above the StarAI chat button */}
-      <div className="absolute bottom-24 right-4 z-10 flex flex-col gap-2 items-end pointer-events-none">
+      {/* Engineering panels — docked on the right, above the StarAI
+          chat button. The viewport ceiling keeps them below the Header
+          on phones (where the header wraps to two rows) so they never
+          spill behind it. */}
+      <div className="absolute bottom-20 sm:bottom-24 right-2 sm:right-4 z-10 flex flex-col gap-2 items-end pointer-events-none max-h-[calc(100vh-160px)] overflow-y-auto sm:overflow-visible">
         <MissionDashboard
           displayedCount={displayedCount}
           activeCount={activeCount}

@@ -275,8 +275,8 @@ export function StarAIChat() {
 
   return (
     <div
-      className="absolute bottom-4 right-4 z-20 glass-panel w-96 max-w-[92vw] animate-fade-in flex flex-col"
-      style={{ height: '500px' }}
+      className="absolute bottom-2 right-2 left-2 sm:left-auto sm:bottom-4 sm:right-4 z-20 glass-panel sm:w-96 sm:max-w-[92vw] animate-fade-in flex flex-col"
+      style={{ height: 'min(500px, calc(100vh - 1rem))' }}
     >
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-white/5">

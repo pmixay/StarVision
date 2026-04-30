@@ -160,7 +160,7 @@ async def test_openrouter_request_payload_uses_fixed_model(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_ask_starai_prefers_server_openrouter_key(monkeypatch):
+async def test_ask_starai_uses_server_openrouter_key(monkeypatch):
     calls = []
 
     async def fake_openrouter(user_message, history, lang, api_key, model):
@@ -172,14 +172,12 @@ async def test_ask_starai_prefers_server_openrouter_key(monkeypatch):
             "source": "openrouter",
         }
 
-    async def fail_anthropic(*_args, **_kwargs):
-        raise AssertionError("Anthropic should not be called when OpenRouter is configured")
-
     history = [{"role": "assistant", "content": "previous"}]
     monkeypatch.setenv("OPENROUTER_API_KEY", "server-openrouter-key")
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "server-anthropic-key")
+    # Even with a stray Anthropic key in the environment we must NEVER
+    # route through Anthropic; OpenRouter is the only allowed provider.
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "stray-key-should-be-ignored")
     monkeypatch.setattr("ai_assistant._ask_openrouter", fake_openrouter)
-    monkeypatch.setattr("ai_assistant._ask_anthropic", fail_anthropic)
 
     result = await ask_starai("hello", history, lang="en")
 
@@ -188,11 +186,29 @@ async def test_ask_starai_prefers_server_openrouter_key(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_ask_starai_falls_back_offline_without_server_keys(monkeypatch):
+async def test_ask_starai_falls_back_offline_without_openrouter_key(monkeypatch):
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    # Anthropic is never consulted: even if a key is present it must be
+    # ignored because the only configured provider is OpenRouter.
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "stray-key-should-be-ignored")
 
     result = await ask_starai("hello", [], lang="en")
 
+    assert result["source"] == "offline"
+    assert result["message"]
+
+
+@pytest.mark.asyncio
+async def test_ask_starai_offline_when_openrouter_call_fails(monkeypatch):
+    async def failing_openrouter(*_args, **_kwargs):
+        raise RuntimeError("upstream boom")
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "server-openrouter-key")
+    monkeypatch.setattr("ai_assistant._ask_openrouter", failing_openrouter)
+
+    result = await ask_starai("hello", [], lang="en")
+
+    # No silent re-route to a different provider — we degrade to the
+    # offline canned response so the user still gets something useful.
     assert result["source"] == "offline"
     assert result["message"]

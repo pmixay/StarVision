@@ -75,7 +75,7 @@ export function CollisionPanel() {
   }
 
   return (
-    <div className="glass-panel w-[320px] p-3 pointer-events-auto animate-slide-right">
+    <div className="glass-panel w-[min(320px,calc(100vw-1rem))] p-3 pointer-events-auto animate-slide-right">
       <div className="flex items-center justify-between mb-2">
         <div className="flex items-center gap-2">
           <span className="w-1.5 h-1.5 rounded-full bg-red-400 animate-pulse" />

@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useStore } from '../hooks/useStore';
+import { useIsMobile } from '../hooks/useMediaQuery';
 import { t, tConstellation } from '../i18n';
 import { getWalkerLayout } from '../lib/orbital';
 import { fetchTLE, refreshTLE, ApiError } from '../services/api';
@@ -37,6 +38,11 @@ export function ControlPanel() {
   } = useStore();
 
   const [tleLoading, setTleLoading] = useState(false);
+  // Collapse-by-default on phone-portrait so the 3D scene isn't covered
+  // by a full-height panel. Desktop ignores this state via responsive
+  // CSS so the panel is always visible there.
+  const isMobile = useIsMobile();
+  const [mobileOpen, setMobileOpen] = useState(false);
 
   const applyTleResponse = (
     requested: 'embedded' | 'celestrak',
@@ -139,17 +145,50 @@ export function ControlPanel() {
     ? `${walkerLayout.baseSatellitesPerPlane + 1}/${walkerLayout.baseSatellitesPerPlane}`
     : `${walkerLayout.baseSatellitesPerPlane}`;
 
+  // On mobile we hide the whole panel behind a toggle button so the
+  // viewport stays useful for the 3D scene. The button mirrors the
+  // collapsed state of the right-side widgets.
+  if (isMobile && !mobileOpen) {
+    return (
+      <button
+        onClick={() => setMobileOpen(true)}
+        className="glass-panel absolute top-3 left-3 px-3 py-2 z-20 pointer-events-auto flex items-center gap-2 text-[11px] font-mono uppercase tracking-wider text-star-200"
+        aria-label={t('control.title', lang)}
+      >
+        <span className="w-1.5 h-1.5 rounded-full bg-star-400 animate-pulse-glow" />
+        <span>{t('control.title', lang)}</span>
+      </button>
+    );
+  }
+
   return (
     <div
-      className="glass-panel absolute top-4 left-4 w-72 max-w-[92vw] p-4 animate-slide-left z-10 overflow-y-auto overflow-x-hidden"
-      style={{ animationDelay: '0.2s', animationFillMode: 'both', maxHeight: 'calc(100vh - 80px)' }}
+      className={
+        isMobile
+          ? 'glass-panel fixed inset-x-2 top-2 bottom-2 p-4 z-30 overflow-y-auto overflow-x-hidden animate-slide-left'
+          : 'glass-panel absolute top-4 left-4 w-72 max-w-[92vw] p-4 animate-slide-left z-10 overflow-y-auto overflow-x-hidden'
+      }
+      style={
+        isMobile
+          ? { animationDelay: '0.2s', animationFillMode: 'both' }
+          : { animationDelay: '0.2s', animationFillMode: 'both', maxHeight: 'calc(100vh - 80px)' }
+      }
     >
       {/* Title */}
       <div className="flex items-center gap-2 mb-4">
         <div className="w-2 h-2 rounded-full bg-star-400 animate-pulse-glow" />
-        <h2 className="font-display font-bold text-star-200 text-sm tracking-wider uppercase">
+        <h2 className="font-display font-bold text-star-200 text-sm tracking-wider uppercase flex-1">
           {t('control.title', lang)}
         </h2>
+        {isMobile && (
+          <button
+            onClick={() => setMobileOpen(false)}
+            aria-label={t('chat.close', lang)}
+            className="text-star-500 hover:text-star-200 transition-colors w-7 h-7 rounded-full hover:bg-white/5 flex items-center justify-center text-base leading-none"
+          >
+            ×
+          </button>
+        )}
       </div>
 
       {/* Simulation speed */}
