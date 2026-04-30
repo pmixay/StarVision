@@ -425,9 +425,7 @@ async def _run_celestrak_fetch(
             # settles, so what we put here is only consumed by tests and
             # by callers that share this future as a signal. Echo back
             # the IDs we attempted, populated from the merged cache.
-            future.set_result(
-                {nid: _tle_cache[nid] for nid in norad_ids if nid in _tle_cache}
-            )
+            future.set_result({nid: _tle_cache[nid] for nid in norad_ids if nid in _tle_cache})
             return
 
         _last_fetch_ok = False
