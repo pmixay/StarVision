@@ -353,6 +353,15 @@ const SatMarker = memo(function SatMarker({
   // memo'd marker re-renders even when nothing else changed.
   const handleClick = useCallback(() => onSelect(noradId), [onSelect, noradId]);
   const groupRef = useRef<Group>(null);
+  // Pin the initial position so re-renders triggered by parent state
+  // (TLE source switches, positions polling) don't snap the marker back
+  // to a stale `initPos` between two frames. After mount, useFrame is
+  // the only writer of group.position. Without this, the JSX
+  // `<group position={...}>` would re-apply the prop on every parent
+  // render — which is exactly the "flicker to default positions" the
+  // user reported when the embedded → CelesTrak switch arrived in two
+  // separate state updates (tleData first, positions second).
+  const initPosRef = useRef(initPos);
   const bodyRef = useRef<Group>(null);
   // Drive the label visibility through a DOM ref + opacity transition rather
   // than React state so a flip near the horizon does not remount the drei
@@ -414,7 +423,7 @@ const SatMarker = memo(function SatMarker({
   });
 
   return (
-    <group ref={groupRef} position={initPos} onClick={handleClick}>
+    <group ref={groupRef} position={initPosRef.current} onClick={handleClick}>
       <group ref={bodyRef}>
         <CubeSatModel
           modelType={modelType}
@@ -581,13 +590,31 @@ export function Satellites({
   const satrecsRef = useRef<Map<number, ReturnType<typeof twoline2satrec>>>(new Map());
 
   useEffect(() => {
-    if (tleData.length > 0) {
-      const map = new Map<number, ReturnType<typeof twoline2satrec>>();
-      tleData.forEach((tle) => {
-        map.set(tle.norad_id, twoline2satrec(tle.tle_line1, tle.tle_line2));
-      });
-      satrecsRef.current = map;
-    }
+    if (tleData.length === 0) return;
+    // Merge into the existing map instead of replacing it. A fresh map
+    // built every TLE update would briefly drop satrecs whose noradId is
+    // missing from the latest payload — useFrame then sees `null` from
+    // getECI and freezes the marker, which the user reads as a flicker.
+    // Mutating in place keeps the lookup table monotonically populated
+    // and updates only the elements whose TLE actually changed.
+    const map = satrecsRef.current;
+    tleData.forEach((tle) => {
+      const existing = map.get(tle.norad_id);
+      // Skip rebuilds when the TLE pair is byte-identical — twoline2satrec
+      // is non-trivial work and we don't want to repeat it on every poll.
+      if (
+        existing
+        && (existing as { _line1?: string })._line1 === tle.tle_line1
+        && (existing as { _line2?: string })._line2 === tle.tle_line2
+      ) {
+        return;
+      }
+      const satrec = twoline2satrec(tle.tle_line1, tle.tle_line2);
+      // Stash the source TLE so subsequent updates can short-circuit.
+      (satrec as { _line1?: string })._line1 = tle.tle_line1;
+      (satrec as { _line2?: string })._line2 = tle.tle_line2;
+      map.set(tle.norad_id, satrec);
+    });
   }, [tleData]);
 
   // Advance shared simTime on each frame (single source of truth)
@@ -632,10 +659,18 @@ export function Satellites({
   // Stable getECI factory: returns the same function reference for the same noradId
   const eciCacheRef = useRef<Record<number, () => { x: number; y: number; z: number } | null>>({});
 
-  // Clear ECI function cache when switching modes or TLE source to prevent unbounded growth
+  // Clear the ECI closure cache only when switching virtual ↔ real mode,
+  // not on every TLE update. The closures look up `satrecsRef.current`
+  // dynamically, so a TLE source switch (embedded ↔ celestrak) keeps the
+  // existing closures valid — they just start returning positions from
+  // the new satrecs on the very next frame. Clearing on every tleData
+  // change forced fresh closure references, which propagated as new
+  // `getECI` props and made every SatMarker re-render simultaneously,
+  // briefly resetting their Three.js position to the prop-supplied
+  // `initPos` and producing the visible flicker.
   useEffect(() => {
     eciCacheRef.current = {};
-  }, [orbitAltitudeKm, tleData]);
+  }, [orbitAltitudeKm]);
 
   const getGetECI = useCallback((noradId: number) => {
     if (!eciCacheRef.current[noradId]) {
@@ -659,6 +694,14 @@ export function Satellites({
   }, []);
 
   // ── Initial positions (for first render, before client data is ready)
+  // Three sources, in priority order:
+  //   1. Server-provided ECI (`positions`) — already-computed truth.
+  //   2. Client-side SGP4 from the loaded satrec — works even if the
+  //      positions endpoint hasn't replied yet.
+  //   3. A fallback derived from the catalog index so the marker spawns
+  //      somewhere physically plausible instead of the old hard-coded
+  //      Vector3(2, 0, 0). That hard-coded point was the "default
+  //      position" satellites visibly snapped to during reload races.
   function getInitialPos(noradId: number): Vector3 {
     const simTime = getSimTime();
     if (orbitAltitudeKm > 0) {
@@ -670,7 +713,28 @@ export function Satellites({
     if (p) {
       return new Vector3(p.eci.x * SCALE, p.eci.z * SCALE, -p.eci.y * SCALE);
     }
-    return new Vector3(2, 0, 0);
+    const satrec = satrecsRef.current.get(noradId);
+    if (satrec) {
+      try {
+        const pv = propagate(satrec, new Date(simTime));
+        if (pv.position && typeof pv.position !== 'boolean') {
+          const eci = pv.position as { x: number; y: number; z: number };
+          if (Number.isFinite(eci.x) && Number.isFinite(eci.y) && Number.isFinite(eci.z)) {
+            return new Vector3(eci.x * SCALE, eci.z * SCALE, -eci.y * SCALE);
+          }
+        }
+      } catch {
+        // SGP4 can throw on malformed elements — fall through.
+      }
+    }
+    // Index-derived fallback orbit (550 km altitude). Spreads markers
+    // around the equator so a brief data race doesn't pile every sat on
+    // the same hard-coded point.
+    const tleIdx = tleData.findIndex((t) => t.norad_id === noradId);
+    const idx = tleIdx >= 0 ? tleIdx : Math.max(0, noradId % 15);
+    const total = Math.max(1, tleData.length);
+    const fallback = computeVirtualECI(idx, total, 550, simTime / 1000, 1, degToRad(55));
+    return new Vector3(fallback.x * SCALE, fallback.z * SCALE, -fallback.y * SCALE);
   }
 
   // Single stable selection callback shared by every SatMarker. Reads

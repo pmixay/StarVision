@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { sendChatMessage } from '../services/api';
+import { fetchTLE, sendChatMessage } from '../services/api';
 import type { ChatMessage } from '../types';
 
 describe('sendChatMessage', () => {
@@ -26,5 +26,36 @@ describe('sendChatMessage', () => {
     expect(body.history).toHaveLength(30);
     expect(body.history[0].content).toBe('msg 20');
     expect(body.history[body.history.length - 1].content).toBe('msg 49');
+  });
+});
+
+describe('fetchTLE source query', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('passes the requested source through to the backend', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => ({ tle_data: [], source: 'celestrak', meta: {} }),
+    } as Response);
+
+    await fetchTLE('celestrak');
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const url = String(fetchMock.mock.calls[0][0]);
+    expect(url).toContain('source=celestrak');
+  });
+
+  it('defaults to embedded when no source is supplied', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => ({ tle_data: [], source: 'embedded', meta: {} }),
+    } as Response);
+
+    await fetchTLE();
+
+    const url = String(fetchMock.mock.calls[0][0]);
+    expect(url).toContain('source=embedded');
   });
 });

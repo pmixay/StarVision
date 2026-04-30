@@ -38,9 +38,12 @@ CACHE_TTL_SEC = 3600  # refresh every hour
 
 # Hard ceiling on a single CelesTrak fetch wall-clock cost. With per-NORAD
 # queries the entire 15-satellite batch typically lands in 4–8 s; we
-# keep a generous 12 s cap so a brief 503 storm + retries still finishes
-# inside the budget instead of leaving the cache half-populated.
-FETCH_WALL_CLOCK_BUDGET_SEC = 12.0
+# keep a generous 20 s cap so a brief 503 storm + retries still finishes
+# inside the budget instead of leaving the cache half-populated. The old
+# 12 s budget was too tight on slow international links — the per-task
+# retries (3 × ~0.6 s backoff) plus a slow first connect could blow it
+# and the user would see "3/15 LIVE, 12 ДЕМО".
+FETCH_WALL_CLOCK_BUDGET_SEC = 20.0
 
 # CelesTrak rate-limits aggressive parallel callers — once we cross
 # roughly a dozen concurrent CATNR requests from the same IP, a sizeable
@@ -50,11 +53,20 @@ FETCH_WALL_CLOCK_BUDGET_SEC = 12.0
 CELESTRAK_MAX_CONCURRENCY = 8
 
 # Per-request retry budget for transient upstream conditions (HTTP 429 /
-# 503 / network timeout). Two retries with a short backoff are enough to
-# rescue the occasional satellite the rate-limiter knocks out without
-# multiplying the wall-clock cost.
-CELESTRAK_RETRIES = 2
-CELESTRAK_RETRY_BACKOFF_SEC = 0.4
+# 503 / network timeout). Three retries with linear backoff rescue the
+# satellites the rate-limiter knocks out on the first attempt without
+# blowing the wall-clock budget.
+CELESTRAK_RETRIES = 3
+CELESTRAK_RETRY_BACKOFF_SEC = 0.6
+
+# Minimum time between successive partial-cache refetch attempts. When a
+# fetch lands only N<15 satellites the fast-path check intentionally
+# fails (len(cached) != len(norad_ids)), which would otherwise let every
+# /api/positions or /api/tle call kick off a brand-new CelesTrak fetch
+# — that's a self-inflicted DoS against the upstream. With this throttle
+# we serve the partial cache verbatim until the cool-down expires, then
+# allow a single fresh attempt to fill the missing IDs.
+PARTIAL_REFETCH_COOLDOWN_SEC = 60.0
 
 _tle_cache: dict[int, tuple[str, str]] = {}
 _cache_timestamp: float = 0.0
@@ -236,6 +248,12 @@ async def fetch_celestrak_tle(norad_ids: list[int] | None = None) -> dict[int, t
         cached = {nid: _tle_cache[nid] for nid in norad_ids if nid in _tle_cache}
         if len(cached) == len(norad_ids):
             return cached
+        # Partial cache + recent attempt → serve what we have without
+        # hammering CelesTrak. Each polling caller would otherwise
+        # restart a fresh fetch, which both delays the response and DoS-es
+        # the upstream when a few NORAD IDs are reliably failing.
+        if cached and (now - _last_fetch_attempt) < PARTIAL_REFETCH_COOLDOWN_SEC:
+            return cached
 
     # Single-flight: coalesce concurrent refresh callers behind a shared
     # future so we never run two CelesTrak fetches in parallel.
@@ -248,12 +266,20 @@ async def fetch_celestrak_tle(norad_ids: list[int] | None = None) -> dict[int, t
             cached = {nid: _tle_cache[nid] for nid in norad_ids if nid in _tle_cache}
             if len(cached) == len(norad_ids):
                 return cached
+            if cached and (now - _last_fetch_attempt) < PARTIAL_REFETCH_COOLDOWN_SEC:
+                return cached
         if _inflight_fetch is not None and not _inflight_fetch.done():
             shared = _inflight_fetch
         else:
+            # On a partial-cache top-up, re-fetch ONLY the NORAD IDs that
+            # are still missing. That keeps the wall-clock budget useful
+            # for the satellites we actually need instead of paying for
+            # 15 round-trips every minute.
+            missing = [nid for nid in norad_ids if nid not in _tle_cache]
+            target = missing if (missing and _tle_cache) else list(norad_ids)
             shared = asyncio.get_running_loop().create_future()
             _inflight_fetch = shared
-            asyncio.create_task(_run_celestrak_fetch(list(norad_ids), shared))
+            asyncio.create_task(_run_celestrak_fetch(target, shared))
 
     try:
         await shared
@@ -377,14 +403,31 @@ async def _run_celestrak_fetch(
         if all_tle:
             _tle_cache.update(all_tle)
             _cache_timestamp = time.time()
-            _last_fetch_ok = True
-            _last_fetch_error = None
+            # Only flag the fetch as "fully OK" when every requested
+            # satellite landed. A partial result still updates the cache,
+            # but health/status surfaces the degradation so the UI can
+            # show "celestrak_partial" instead of pretending we have
+            # full live data.
+            fully_satisfied = all(nid in _tle_cache for nid in norad_ids)
+            if fully_satisfied:
+                _last_fetch_ok = True
+                _last_fetch_error = None
+            else:
+                _last_fetch_ok = False
+                _last_fetch_error = network_error or ERR_EMPTY
             logger.info(
-                "TLE cache updated: %d/%d satellites fetched from CelesTrak",
+                "TLE cache updated: %d/%d satellites fetched from CelesTrak (partial=%s)",
                 len(all_tle),
                 len(norad_ids),
+                not fully_satisfied,
             )
-            future.set_result({nid: _tle_cache[nid] for nid in norad_ids if nid in _tle_cache})
+            # The outer fetcher re-reads `_tle_cache` after the future
+            # settles, so what we put here is only consumed by tests and
+            # by callers that share this future as a signal. Echo back
+            # the IDs we attempted, populated from the merged cache.
+            future.set_result(
+                {nid: _tle_cache[nid] for nid in norad_ids if nid in _tle_cache}
+            )
             return
 
         _last_fetch_ok = False

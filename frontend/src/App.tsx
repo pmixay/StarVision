@@ -59,19 +59,33 @@ export default function App() {
       });
   }, [setSatellites, pushToast, logEvent, lang]);
 
-  // Load TLE for client-side SGP4
+  // Load TLE for client-side SGP4. Honour the stored `tleSource` so a
+  // session that re-mounted with `celestrak` selected doesn't quietly
+  // load the embedded catalog and require an extra click to recover.
   useEffect(() => {
-    fetchTLE()
+    fetchTLE(tleSource)
       .then((res) => {
         setTleData(res.tle_data);
         setTleMeta(res.meta);
-        if (res.meta.effective_source === 'embedded_fallback') {
+        if (res.meta.effective_source === 'embedded_fallback' && tleSource === 'celestrak') {
           pushToast({
             level: 'warning',
             title: t('event.tleFallback', lang),
             detail: `${res.meta.total} embedded`,
           });
           logEvent({ level: 'warning', kind: 'tle_fallback', message: t('event.tleFallback', lang) });
+        } else if (res.meta.effective_source === 'celestrak_partial') {
+          pushToast({
+            level: 'warning',
+            title: t('event.tlePartial', lang),
+            detail: `${res.meta.fallback_count} / ${res.meta.total} ${t('source.demoShort', lang)}`,
+          });
+          logEvent({
+            level: 'warning',
+            kind: 'tle_fallback',
+            message: t('event.tlePartial', lang),
+            details: `${res.meta.fallback_count}/${res.meta.total}`,
+          });
         } else {
           logEvent({
             level: 'info',
@@ -86,7 +100,8 @@ export default function App() {
         pushToast({ level: 'error', title: t('event.apiError', lang), detail });
         logEvent({ level: 'error', kind: 'api_error', message: 'fetchTLE failed', details: detail });
       });
-    // deliberately run once on mount; locale changes don't require refetch.
+    // deliberately run once on mount; subsequent source switches go
+    // through ControlPanel.handleTleSourceChange.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

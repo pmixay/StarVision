@@ -101,11 +101,22 @@ function CameraController({ tleData, orbitAltitudeKm, satelliteCount, orbitalPla
   const satrecsRef = useRef<Record<number, ReturnType<typeof twoline2satrec>>>({});
 
   useEffect(() => {
-    const map: Record<number, ReturnType<typeof twoline2satrec>> = {};
+    if (tleData.length === 0) return;
+    // Merge in place to keep the lookup monotonically populated — the
+    // camera follow loop reads a single noradId per frame and would
+    // briefly lose its target if a TLE source switch dropped the entry
+    // mid-frame.
+    const map = satrecsRef.current;
     tleData.forEach((tle) => {
-      map[tle.norad_id] = twoline2satrec(tle.tle_line1, tle.tle_line2);
+      const existing = map[tle.norad_id] as { _line1?: string; _line2?: string } | undefined;
+      if (existing && existing._line1 === tle.tle_line1 && existing._line2 === tle.tle_line2) {
+        return;
+      }
+      const satrec = twoline2satrec(tle.tle_line1, tle.tle_line2);
+      (satrec as { _line1?: string })._line1 = tle.tle_line1;
+      (satrec as { _line2?: string })._line2 = tle.tle_line2;
+      map[tle.norad_id] = satrec;
     });
-    satrecsRef.current = map;
   }, [tleData]);
 
   // When the tracked satellite is no longer available (TLE dropped,
