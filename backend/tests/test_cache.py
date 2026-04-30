@@ -260,6 +260,83 @@ async def test_partial_fetch_marks_status_not_ok(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_bulk_first_lands_full_catalog_without_per_norad(monkeypatch):
+    """The runner's primary path is now a single bulk GROUP fetch. When
+    that returns every target NORAD ID we MUST NOT fall through to the
+    per-NORAD fill-in — that defeats the whole point of bulk and would
+    re-introduce the rate-limit storm we saw in production.
+    """
+    live = _live_norads()
+
+    catnr_called = 0
+
+    async def fake_throttled(_client, url, _sem):
+        # Pretend the first bulk source carries every target sat. Real
+        # CelesTrak GROUP responses contain hundreds of TLEs; the runner
+        # filters to target_set, so a noisy payload is safe to fake.
+        if "GROUP=" in url:
+            return ({nid: (f"l1-{nid}", f"l2-{nid}") for nid in live}, "ok")
+        # Mirrors return a strictly-amateur subset.
+        return ({}, "empty")
+
+    async def fake_with_retry(_client, url, semaphore):  # noqa: ARG001
+        nonlocal catnr_called
+        catnr_called += 1
+        return ({}, "ok")
+
+    monkeypatch.setattr(celestrak, "_fetch_url_throttled", fake_throttled)
+    monkeypatch.setattr(celestrak, "_fetch_url_with_retry", fake_with_retry)
+
+    fut: asyncio.Future = asyncio.get_event_loop().create_future()
+    await celestrak._run_celestrak_fetch(list(live), fut)  # type: ignore[attr-defined]
+
+    assert catnr_called == 0, "per-NORAD must not run when bulk covered everything"
+    status = get_cache_status()
+    assert status["entries"] == len(live)
+    assert status["last_fetch_ok"] is True
+
+
+@pytest.mark.asyncio
+async def test_per_norad_fillin_only_for_missing(monkeypatch):
+    """When bulk sources return an incomplete subset, the runner must
+    fall through to per-NORAD CATNR ONLY for the satellites that are
+    still missing — querying everything again would waste the budget
+    and trip rate-limiting on the IDs we already have.
+    """
+    live = _live_norads()
+    bulk_covers = set(live[:10])
+    catnr_targets: list[str] = []
+
+    async def fake_throttled(_client, url, _sem):
+        if "GROUP=" in url:
+            # First bulk delivers a subset; further bulks empty.
+            if "GROUP=cubesat" in url:
+                return ({nid: (f"b1-{nid}", f"b2-{nid}") for nid in bulk_covers}, "ok")
+            return ({}, "empty")
+        return ({}, "empty")
+
+    async def fake_with_retry(_client, url, semaphore):  # noqa: ARG001
+        catnr_targets.append(url)
+        # Extract the NORAD ID and supply a TLE for it.
+        nid = int(url.split("CATNR=")[1].split("&")[0])
+        return ({nid: (f"c1-{nid}", f"c2-{nid}")}, "ok")
+
+    monkeypatch.setattr(celestrak, "_fetch_url_throttled", fake_throttled)
+    monkeypatch.setattr(celestrak, "_fetch_url_with_retry", fake_with_retry)
+
+    fut: asyncio.Future = asyncio.get_event_loop().create_future()
+    await celestrak._run_celestrak_fetch(list(live), fut)  # type: ignore[attr-defined]
+
+    # CATNR fill-in only for the 5 sats absent from the bulk response.
+    expected_missing = set(live) - bulk_covers
+    queried_nids = {int(u.split("CATNR=")[1].split("&")[0]) for u in catnr_targets}
+    assert queried_nids == expected_missing
+    status = get_cache_status()
+    assert status["entries"] == len(live)
+    assert status["last_fetch_ok"] is True
+
+
+@pytest.mark.asyncio
 async def test_full_fetch_marks_status_ok(monkeypatch):
     """The happy path — every requested NORAD ID lands — must set
     `last_fetch_ok=True` so the /api/health probe goes green.
