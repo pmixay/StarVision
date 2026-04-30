@@ -72,18 +72,20 @@ export function Header({ satelliteCount, activeCount, timeSpeed, activeLinksCoun
 
   return (
     <div className="absolute top-0 left-0 right-0 z-10 pointer-events-none">
-      <div className="flex items-center justify-between px-4 py-3">
-        {/* Logo — offset to avoid overlap with control panel */}
-        <div className="pointer-events-auto flex items-center gap-3 ml-[310px]">
+      <div className="flex items-start sm:items-center justify-between px-2 sm:px-4 py-2 sm:py-3 gap-2 flex-wrap">
+        {/* Logo — pushed right on desktop so it doesn't collide with the
+            ControlPanel; on mobile the panel is collapsed by default so
+            the offset is unnecessary and would steal status-bar space. */}
+        <div className="pointer-events-auto flex items-center gap-2 sm:gap-3 ml-12 sm:ml-[310px]">
           <div className="relative">
-            <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-star-500/20 via-star-600/15 to-star-900/30 flex items-center justify-center shadow-lg shadow-star-600/30 ring-1 ring-star-500/30">
-              <img src="/brand/logo.svg" alt="StarVision" className="w-7 h-7 drop-shadow-[0_0_6px_rgba(80,150,255,0.55)]" />
+            <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-lg bg-gradient-to-br from-star-500/20 via-star-600/15 to-star-900/30 flex items-center justify-center shadow-lg shadow-star-600/30 ring-1 ring-star-500/30">
+              <img src="/brand/logo.svg" alt="StarVision" className="w-6 h-6 sm:w-7 sm:h-7 drop-shadow-[0_0_6px_rgba(80,150,255,0.55)]" />
             </div>
             <div className={`absolute -top-0.5 -right-0.5 w-2.5 h-2.5 rounded-full ${
               backendReachable ? 'bg-green-400' : 'bg-red-400'
             } border border-void-900`} />
           </div>
-          <div>
+          <div className="hidden sm:block">
             <h1 className="font-display font-bold text-star-100 text-sm tracking-wide">
               StarVision
             </h1>
@@ -93,36 +95,40 @@ export function Header({ satelliteCount, activeCount, timeSpeed, activeLinksCoun
           </div>
         </div>
 
-        <div className="flex-1" />
+        <div className="hidden sm:block flex-1" />
 
-        {/* Language switcher + Status bar */}
-        <div className="pointer-events-auto flex items-center gap-3 mr-4 flex-wrap justify-end">
+        {/* Language switcher + Status bar. On mobile the bar shrinks to
+            the high-signal items only (count, speed, status) so the 3D
+            view keeps most of the viewport. */}
+        <div className="pointer-events-auto flex items-center gap-2 sm:gap-3 sm:mr-4 flex-wrap justify-end ml-auto">
           <div className="flex items-center gap-0.5 glass-panel px-1.5 py-1">
             <LangButton current={lang} value="ru" label="RU" onClick={setLang} />
             <LangButton current={lang} value="en" label="EN" onClick={setLang} />
           </div>
 
-          <div className="flex items-center gap-4 glass-panel px-4 py-2 flex-wrap">
-            <StatusItem label={t('header.utc', lang)} value={utcStr} />
-            <Divider />
+          <div className="flex items-center gap-2 sm:gap-4 glass-panel px-2 sm:px-4 py-1.5 sm:py-2 flex-wrap">
+            <StatusItem className="hidden md:flex" label={t('header.utc', lang)} value={utcStr} />
+            <Divider className="hidden md:block" />
             <StatusItem label={t('header.spacecraft', lang)} value={`${activeCount}/${satelliteCount}`} />
             <Divider />
             <StatusItem label={t('header.speed', lang)} value={`${timeSpeed}×`} />
-            <Divider />
+            <Divider className="hidden sm:block" />
             <StatusItem
+              className="hidden sm:flex"
               label={t('header.isl', lang)}
               value={`${activeLinksCount}`}
               valueClass={activeLinksCount > 0 ? 'text-green-400' : 'text-star-600'}
             />
-            <Divider />
+            <Divider className="hidden md:block" />
             <StatusItem
+              className="hidden md:flex"
               label={t('header.source', lang)}
               value={srcText}
               valueClass={srcClass}
               title={tleMeta ? `${t('header.source', lang)}: ${srcText}; requested=${tleMeta.requested_source}; live=${tleMeta.live_count}/${tleMeta.total}; fallback=${tleMeta.fallback_count}` : undefined}
             />
-            <Divider />
-            <StatusItem label={t('header.fresh', lang)} value={freshness} />
+            <Divider className="hidden md:block" />
+            <StatusItem className="hidden md:flex" label={t('header.fresh', lang)} value={freshness} />
             <Divider />
             <StatusItem
               label={t('header.status', lang)}
@@ -167,20 +173,22 @@ function StatusItem({
   value,
   valueClass = 'text-star-200',
   title,
+  className = '',
 }: {
   label: string;
   value: string;
   valueClass?: string;
   title?: string;
+  className?: string;
 }) {
   return (
-    <div className="flex items-baseline gap-1.5" title={title}>
+    <div className={`flex items-baseline gap-1.5 ${className}`} title={title}>
       <span className="text-[9px] text-star-600 font-mono uppercase">{label}</span>
       <span className={`text-[11px] font-mono ${valueClass}`}>{value}</span>
     </div>
   );
 }
 
-function Divider() {
-  return <div className="w-px h-3 bg-star-800" />;
+function Divider({ className = '' }: { className?: string }) {
+  return <div className={`w-px h-3 bg-star-800 ${className}`} />;
 }

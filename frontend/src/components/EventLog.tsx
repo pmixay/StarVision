@@ -39,7 +39,7 @@ export function EventLog() {
   }
 
   return (
-    <div className="glass-panel w-[320px] max-h-[60vh] flex flex-col pointer-events-auto animate-slide-right">
+    <div className="glass-panel w-[min(320px,calc(100vw-1rem))] max-h-[60vh] flex flex-col pointer-events-auto animate-slide-right">
       <div className="flex items-center justify-between px-3 py-2 border-b border-white/5">
         <div className="flex items-center gap-2">
           <span className="w-1.5 h-1.5 rounded-full bg-star-400 animate-pulse" />
